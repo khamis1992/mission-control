@@ -17,6 +17,13 @@ export type EventType =
   | 'task.updated'
   | 'task.deleted'
   | 'task.status_changed'
+  | 'task.subtasks_generated'
+  | 'task.checkpoint_saved'
+  | 'task.recovering'
+  | 'task.escalated'
+  | 'task.artifact_created'
+  | 'task.progress'
+  | 'task.parallel_group_completed'
   | 'chat.message'
   | 'chat.message.deleted'
   | 'notification.created'
@@ -36,7 +43,6 @@ export type EventType =
   | 'run.updated'
   | 'run.completed'
   | 'run.eval_attached'
-  | 'task.escalated'
   | 'session.updated'
 
 class ServerEventBus extends EventEmitter {

@@ -120,6 +120,70 @@ export function useServerEvents() {
             deleteTask(event.data.id)
           }
           break
+        case 'task.subtasks_generated':
+          fetch('/api/tasks?status=inbox,assigned,in_progress,review,quality_review,done')
+            .then(r => r.json())
+            .then(data => {
+              if (data.tasks) {
+                const { setTasks } = useMissionControl.getState()
+                setTasks(data.tasks)
+              }
+            })
+            .catch(() => {})
+          break
+        case 'task.checkpoint_saved':
+          if (event.data?.task_id) {
+            updateTask(event.data.task_id, {
+              metadata: { checkpoint: { stage: event.data.stage, progress: event.data.progress } }
+            })
+          }
+          break
+        case 'task.recovering':
+          if (event.data?.task_id) {
+            updateTask(event.data.task_id, {
+              error_message: `Recovering (attempt ${event.data.attempt}/${event.data.max_retries}): ${event.data.error || ''}`
+            })
+          }
+          break
+        case 'task.escalated':
+          if (event.data?.id) {
+            updateTask(event.data.id, {
+              status: 'failed',
+              error_message: event.data.error_message || event.data.reason || 'Task escalated'
+            })
+          }
+          break
+        case 'task.artifact_created':
+          if (event.data?.task_id) {
+            fetch(`/api/tasks/${event.data.task_id}`)
+              .then(r => r.json())
+              .then(taskData => {
+                if (taskData?.id) {
+                  updateTask(taskData.id, taskData)
+                }
+              })
+              .catch(() => {})
+          }
+          break
+        case 'task.progress':
+          if (event.data?.task_id || event.data?.id) {
+            const taskId = event.data.task_id || event.data.id
+            updateTask(taskId, {
+              metadata: { progress: event.data.progress, progress_message: event.data.message }
+            })
+          }
+          break
+        case 'task.parallel_group_completed':
+          fetch('/api/tasks?status=inbox,assigned,in_progress,review,quality_review,done')
+            .then(r => r.json())
+            .then(data => {
+              if (data.tasks) {
+                const { setTasks } = useMissionControl.getState()
+                setTasks(data.tasks)
+              }
+            })
+            .catch(() => {})
+          break
 
         // Agent events
         case 'agent.created':

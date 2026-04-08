@@ -1416,6 +1416,81 @@ const migrations: Migration[] = [
     up(db: Database.Database) {
       db.exec(`ALTER TABLE agents ADD COLUMN runtime_type TEXT DEFAULT NULL`)
     }
+  },
+  {
+    id: '050_autonomous_task_factory',
+    up(db: Database.Database) {
+      // Add new columns to tasks table for autonomous software factory
+      const taskCols = db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>
+      const hasTaskCol = (name: string) => taskCols.some((c) => c.name === name)
+
+      // Task type: normal, mission, subtask, system
+      if (!hasTaskCol('task_type')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN task_type TEXT NOT NULL DEFAULT 'normal'`)
+      }
+
+      // Parent task ID for hierarchical subtasks
+      if (!hasTaskCol('parent_task_id')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN parent_task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE`)
+      }
+
+      // Execution mode: manual, autonomous
+      if (!hasTaskCol('execution_mode')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'manual'`)
+      }
+
+      // Agent role for specialized task assignment
+      if (!hasTaskCol('agent_role')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN agent_role TEXT`)
+      }
+
+      // Parallel group ID for parallel execution
+      if (!hasTaskCol('parallel_group_id')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN parallel_group_id TEXT`)
+      }
+
+      // Max retries for self-healing
+      if (!hasTaskCol('max_retries')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 3`)
+      }
+
+      // Failure type classification
+      if (!hasTaskCol('failure_type')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN failure_type TEXT`)
+      }
+
+      // Recovery strategy (JSON)
+      if (!hasTaskCol('recovery_strategy')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN recovery_strategy TEXT`)
+      }
+
+      // Checkpoint data for resume (JSON)
+      if (!hasTaskCol('checkpoint_data')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN checkpoint_data TEXT`)
+      }
+
+      // Artifacts produced by task (JSON array)
+      if (!hasTaskCol('artifacts')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN artifacts TEXT DEFAULT '[]'`)
+      }
+
+      // Deliberation decisions (JSON array)
+      if (!hasTaskCol('decisions')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN decisions TEXT DEFAULT '[]'`)
+      }
+
+      // Recovery logs (JSON array)
+      if (!hasTaskCol('recovery_logs')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN recovery_logs TEXT DEFAULT '[]'`)
+      }
+
+      // Indexes for efficient querying
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id)`)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(task_type)`)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_execution_mode ON tasks(execution_mode)`)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_parallel_group ON tasks(parallel_group_id)`)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_agent_role ON tasks(agent_role)`)
+    }
   }
 ]
 

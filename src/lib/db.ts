@@ -210,8 +210,21 @@ export interface Task {
   feedback_notes?: string;
   retry_count?: number;
   completed_at?: number;
-  tags?: string; // JSON string
-  metadata?: string; // JSON string
+  tags?: string;
+  metadata?: string;
+  workspace_id?: number;
+  task_type?: 'normal' | 'mission' | 'subtask' | 'system';
+  parent_task_id?: number;
+  execution_mode?: 'manual' | 'autonomous';
+  agent_role?: 'planner' | 'architect' | 'backend' | 'frontend' | 'qa' | 'devops' | 'reviewer' | 'recovery';
+  parallel_group_id?: string;
+  max_retries?: number;
+  failure_type?: string;
+  recovery_strategy?: string;
+  checkpoint_data?: string;
+  artifacts?: string;
+  decisions?: string;
+  recovery_logs?: string;
 }
 
 export interface Agent {

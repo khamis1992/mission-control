@@ -5,6 +5,7 @@ import { eventBus } from './event-bus'
 import { logger } from './logger'
 import { config } from './config'
 import { syncTaskOutbound } from './github-sync-engine'
+import { matchAgentToRole } from './agent-role-matcher'
 
 /** Sync task to GitHub/GNAP and broadcast escalation if task failed */
 function syncAndEscalateIfFailed(task: { id: number; title: string; status: string; priority: string; project_id?: number | null; workspace_id: number; description?: string | null }, newStatus: string, errorMsg?: string, dispatchAttempts?: number): void {
@@ -21,6 +22,16 @@ function syncAndEscalateIfFailed(task: { id: number; title: string; status: stri
   }
 }
 
+export function broadcastProgress(taskId: number, progress: number, message?: string, workspaceId?: number): void {
+  eventBus.broadcast('task.progress', {
+    task_id: taskId,
+    progress: Math.max(0, Math.min(100, progress)),
+    message,
+    workspace_id: workspaceId,
+    timestamp: Date.now()
+  })
+}
+
 interface DispatchableTask {
   id: number
   title: string
@@ -35,7 +46,183 @@ interface DispatchableTask {
   ticket_prefix: string | null
   project_ticket_no: number | null
   project_id: number | null
+  agent_role?: 'planner' | 'architect' | 'backend' | 'frontend' | 'qa' | 'devops' | 'reviewer' | 'recovery'
   tags?: string[]
+}
+
+export async function dispatchParallelGroups(): Promise<{ ok: boolean; dispatched: number; message: string }> {
+  const db = getDatabase()
+
+  const workspaceRow = db.prepare('SELECT id FROM workspaces LIMIT 1').get() as { id: number } | undefined
+  const workspaceId = workspaceRow?.id || 1
+
+  const groups = db.prepare(`
+    SELECT DISTINCT parallel_group_id 
+    FROM tasks 
+    WHERE status = 'assigned' 
+      AND parallel_group_id IS NOT NULL
+      AND execution_mode = 'autonomous'
+      AND workspace_id = ?
+  `).all(workspaceId) as { parallel_group_id: string }[]
+
+  if (groups.length === 0) {
+    return { ok: true, dispatched: 0, message: 'No parallel groups to dispatch' }
+  }
+
+  let totalDispatched = 0
+  const groupResults: { group: string; total: number; succeeded: number }[] = []
+
+  for (const group of groups) {
+    const tasks = db.prepare(`
+      SELECT t.*, a.name as agent_name, a.id as agent_id, a.config as agent_config,
+             p.ticket_prefix, t.project_ticket_no
+      FROM tasks t
+      JOIN agents a ON a.name = t.assigned_to AND a.workspace_id = t.workspace_id
+      LEFT JOIN projects p ON p.id = t.project_id AND p.workspace_id = t.workspace_id
+      WHERE t.parallel_group_id = ? 
+        AND t.status = 'assigned'
+        AND t.workspace_id = ?
+    `).all(group.parallel_group_id, workspaceId) as DispatchableTask[]
+
+    if (tasks.length === 0) continue
+
+    const dispatchPromises = tasks.map(task => dispatchSingleTask(task))
+    const results = await Promise.allSettled(dispatchPromises)
+    
+    const succeeded = results.filter(r => r.status === 'fulfilled' && (r.value as any).ok).length
+    totalDispatched += succeeded
+    groupResults.push({ group: group.parallel_group_id, total: tasks.length, succeeded })
+
+    logger.info({
+      group: group.parallel_group_id,
+      total: tasks.length,
+      succeeded
+    }, 'Parallel group dispatched')
+  }
+
+  const summary = groupResults.map(g => `${g.group}: ${g.succeeded}/${g.total}`).join(', ')
+  return { 
+    ok: true, 
+    dispatched: totalDispatched, 
+    message: `Dispatched ${totalDispatched} tasks across ${groups.length} groups (${summary})` 
+  }
+}
+
+async function dispatchSingleTask(task: DispatchableTask): Promise<{ ok: boolean; taskId: number }> {
+  const db = getDatabase()
+  const now = Math.floor(Date.now() / 1000)
+  
+  db.prepare(`UPDATE tasks SET status = 'in_progress', updated_at = ? WHERE id = ?`)
+    .run(now, task.id)
+  
+  eventBus.broadcast('task.status_changed', {
+    id: task.id,
+    status: 'in_progress',
+    previous_status: 'assigned'
+  })
+
+  try {
+    const prompt = buildParallelTaskPrompt(task)
+    const modelOverride = classifyTaskModel(task)
+
+    let agentResponse: { text: string | null; sessionId: string | null }
+    const useDirectApi = !isGatewayAvailable() && getAnthropicApiKey()
+
+    if (useDirectApi) {
+      agentResponse = await callClaudeDirectly(task, prompt)
+    } else {
+      const gatewayAgentId = resolveGatewayAgentId(task)
+      const invokeParams: Record<string, unknown> = {
+        message: prompt,
+        agentId: gatewayAgentId,
+        idempotencyKey: `parallel-dispatch-${task.id}-${Date.now()}`,
+        deliver: false,
+      }
+      if (modelOverride) invokeParams.model = modelOverride
+
+      const finalResult = await runOpenClaw(
+        ['gateway', 'call', 'agent', '--expect-final', '--timeout', '120000', '--params', JSON.stringify(invokeParams), '--json'],
+        { timeoutMs: 125_000 }
+      )
+      const finalPayload = parseGatewayJson(finalResult.stdout)
+        ?? parseGatewayJson(String((finalResult as any)?.stderr || ''))
+
+      agentResponse = parseAgentResponse(
+        finalPayload?.result ? JSON.stringify(finalPayload.result) : finalResult.stdout
+      )
+      if (!agentResponse.sessionId && finalPayload?.result?.meta?.agentMeta?.sessionId) {
+        agentResponse.sessionId = finalPayload.result.meta.agentMeta.sessionId
+      }
+    }
+
+    if (!agentResponse.text) {
+      throw new Error('Agent returned empty response')
+    }
+
+    const truncated = agentResponse.text.length > 10_000
+      ? agentResponse.text.substring(0, 10_000) + '\n\n[Response truncated at 10,000 characters]'
+      : agentResponse.text
+
+    db.prepare(`
+      UPDATE tasks 
+      SET status = 'review',
+          resolution = ?,
+          outcome = 'success',
+          updated_at = ?
+      WHERE id = ?
+    `).run(truncated, Math.floor(Date.now() / 1000), task.id)
+
+    eventBus.broadcast('task.status_changed', {
+      id: task.id,
+      status: 'review',
+      previous_status: 'in_progress'
+    })
+
+    return { ok: true, taskId: task.id }
+  } catch (error: any) {
+    const errorMsg = error.message || 'Unknown error'
+    
+    db.prepare(`
+      UPDATE tasks 
+      SET status = 'assigned',
+          error_message = ?,
+          retry_count = COALESCE(retry_count, 0) + 1,
+          updated_at = ?
+      WHERE id = ?
+    `).run(errorMsg.substring(0, 5000), Math.floor(Date.now() / 1000), task.id)
+
+    eventBus.broadcast('task.status_changed', {
+      id: task.id,
+      status: 'assigned',
+      previous_status: 'in_progress',
+      error_message: errorMsg.substring(0, 500)
+    })
+
+    logger.error({ taskId: task.id, error: errorMsg }, 'Parallel dispatch failed')
+    return { ok: false, taskId: task.id }
+  }
+}
+
+function buildParallelTaskPrompt(task: DispatchableTask): string {
+  const ticket = task.ticket_prefix && task.project_ticket_no
+    ? `${task.ticket_prefix}-${String(task.project_ticket_no).padStart(3, '0')}`
+    : `TASK-${task.id}`
+
+  const lines = [
+    `**[${ticket}] ${task.title}**`,
+    `Priority: ${task.priority}`,
+  ]
+
+  if (task.agent_role) {
+    lines.push(`Role: ${task.agent_role}`)
+  }
+
+  if (task.description) {
+    lines.push('', task.description)
+  }
+
+  lines.push('', 'Complete this task and provide your response.')
+  return lines.join('\n')
 }
 
 // ---------------------------------------------------------------------------
@@ -261,7 +448,7 @@ function getAgentSoulContent(task: DispatchableTask): string | null {
   }
 }
 
-async function callClaudeDirectly(
+export async function callClaudeDirectly(
   task: DispatchableTask,
   prompt: string,
 ): Promise<AgentResponseParsed> {

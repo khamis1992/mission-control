@@ -51,6 +51,19 @@ export const createTaskSchema = z.object({
   completed_at: z.number().int().min(0).max(4102444800).optional(),
   tags: z.array(z.string().min(1).max(100)).max(50).default([] as string[]),
   metadata: taskMetadataSchema.default({} as Record<string, unknown>),
+  // Autonomous Software Factory fields
+  task_type: z.enum(['normal', 'mission', 'subtask', 'system']).default('normal'),
+  parent_task_id: z.number().int().positive().optional(),
+  execution_mode: z.enum(['manual', 'autonomous']).default('manual'),
+  agent_role: z.enum(['planner', 'architect', 'backend', 'frontend', 'qa', 'devops', 'reviewer', 'recovery']).optional(),
+  parallel_group_id: z.string().max(100).optional(),
+  max_retries: z.number().int().min(0).max(10).default(3),
+  failure_type: z.string().max(100).optional(),
+  recovery_strategy: z.record(z.string(), z.unknown()).optional(),
+  checkpoint_data: z.record(z.string(), z.unknown()).optional(),
+  artifacts: z.array(z.record(z.string(), z.unknown())).max(100).optional(),
+  decisions: z.array(z.record(z.string(), z.unknown())).max(100).optional(),
+  recovery_logs: z.array(z.record(z.string(), z.unknown())).max(100).optional(),
 })
 
 export const updateTaskSchema = createTaskSchema.partial()

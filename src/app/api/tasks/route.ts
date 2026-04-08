@@ -326,6 +326,22 @@ export async function POST(request: NextRequest) {
     // Broadcast to SSE clients
     eventBus.broadcast('task.created', parsedTask);
 
+    // Auto-generate subtasks for autonomous mission tasks
+    if (parsedTask.task_type === 'mission' && parsedTask.execution_mode === 'autonomous') {
+      const baseUrl = process.env.VERCEL_URL 
+        ? `https://${process.env.VERCEL_URL}`
+        : `http://localhost:${process.env.PORT || 3000}`
+      const apiKey = process.env.API_KEY || ''
+      
+      fetch(`${baseUrl}/api/tasks/${taskId}/generate-subtasks`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        }
+      }).catch(err => logger.error({ err, taskId }, 'Failed to trigger subtask generation'))
+    }
+
     return NextResponse.json({ task: parsedTask }, { status: 201 });
   } catch (error) {
     logger.error({ err: error }, 'POST /api/tasks error');

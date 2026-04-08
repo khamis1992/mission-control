@@ -129,6 +129,19 @@ export interface Task {
   github_branch?: string
   github_pr_number?: number
   github_pr_state?: string
+  // Autonomous Software Factory fields
+  task_type?: 'normal' | 'mission' | 'subtask' | 'system'
+  parent_task_id?: number
+  execution_mode?: 'manual' | 'autonomous'
+  agent_role?: 'planner' | 'architect' | 'backend' | 'frontend' | 'qa' | 'devops' | 'reviewer' | 'recovery'
+  parallel_group_id?: string
+  max_retries?: number
+  failure_type?: string
+  recovery_strategy?: JsonValue
+  checkpoint_data?: JsonValue
+  artifacts?: JsonValue[]
+  decisions?: JsonValue[]
+  recovery_logs?: JsonValue[]
 }
 
 export interface Agent {

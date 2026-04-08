@@ -47,6 +47,19 @@ interface Task {
   comment_count?: number
   error_message?: string
   dispatch_attempts?: number
+  task_type?: 'normal' | 'mission' | 'subtask' | 'system'
+  parent_task_id?: number
+  execution_mode?: 'manual' | 'autonomous'
+  agent_role?: 'planner' | 'architect' | 'backend' | 'frontend' | 'qa' | 'devops' | 'reviewer' | 'recovery'
+  parallel_group_id?: string
+  max_retries?: number
+  failure_type?: string
+  recovery_strategy?: any
+  checkpoint_data?: any
+  artifacts?: any[]
+  decisions?: any[]
+  recovery_logs?: any[]
+  retry_count?: number
 }
 
 interface Agent {
@@ -1194,6 +1207,156 @@ export function TaskBoardPanel() {
   )
 }
 
+function SubtaskTreeView({ parentTaskId }: { parentTaskId: number }) {
+  const [subtasks, setSubtasks] = useState<Task[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetch(`/api/tasks?parent_task_id=${parentTaskId}`)
+      .then(r => r.json())
+      .then(data => {
+        setSubtasks(data.tasks || [])
+        setLoading(false)
+      })
+      .catch(() => setLoading(false))
+  }, [parentTaskId])
+
+  if (loading) return <div className="text-muted-foreground">Loading subtasks...</div>
+  if (subtasks.length === 0) return <div className="text-muted-foreground">No subtasks yet</div>
+
+  return (
+    <div className="space-y-2">
+      {subtasks.map(st => (
+        <div key={st.id} className="border-l-2 border-primary/30 pl-3 py-1">
+          <div className="flex items-center justify-between">
+            <span className="font-medium text-foreground">{st.title}</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+              st.status === 'done' ? 'bg-green-500/20 text-green-400' :
+              st.status === 'in_progress' ? 'bg-yellow-500/20 text-yellow-400' :
+              st.status === 'failed' ? 'bg-red-500/20 text-red-400' :
+              'bg-surface-2 text-muted-foreground'
+            }`}>
+              {st.status}
+            </span>
+          </div>
+          {st.agent_role && (
+            <div className="text-[10px] text-muted-foreground mt-1">
+              Role: {st.agent_role}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ArtifactList({ artifacts }: { artifacts: any[] }) {
+  if (artifacts.length === 0) return <div className="text-muted-foreground">No artifacts yet</div>
+
+  return (
+    <div className="space-y-2">
+      {artifacts.map((artifact, idx) => (
+        <div key={idx} className="border border-border/50 rounded p-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="font-medium text-foreground">{artifact.title}</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/20 text-primary">
+              {artifact.type}
+            </span>
+          </div>
+          <div className="text-xs text-muted-foreground max-h-32 overflow-y-auto">
+            {artifact.content?.substring(0, 200)}...
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function DecisionThread({ decisions }: { decisions: any[] }) {
+  if (decisions.length === 0) return <div className="text-muted-foreground">No decisions yet</div>
+
+  return (
+    <div className="space-y-3">
+      {decisions.map((decision, idx) => (
+        <div key={idx} className="border-l-2 border-blue-500/30 pl-3">
+          <div className="text-xs text-muted-foreground mb-1">
+            {decision.type || 'Decision'}
+          </div>
+          <div className="text-sm text-foreground">{decision.summary || decision.content}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function TaskExecutionLogs({ taskId }: { taskId: number }) {
+  const [logs, setLogs] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetch(`/api/tasks/${taskId}/comments`)
+      .then(r => r.json())
+      .then(data => {
+        setLogs(data.comments || [])
+        setLoading(false)
+      })
+      .catch(() => setLoading(false))
+  }, [taskId])
+
+  if (loading) return <div className="text-muted-foreground">Loading logs...</div>
+  if (logs.length === 0) return <div className="text-muted-foreground">No execution logs yet</div>
+
+  return (
+    <div className="space-y-2 max-h-96 overflow-y-auto">
+      {logs.map((log, idx) => (
+        <div key={idx} className="text-xs border-b border-border/30 pb-2">
+          <div className="flex items-center justify-between text-muted-foreground mb-1">
+            <span>{log.author}</span>
+            <span>{new Date(log.created_at * 1000).toLocaleString()}</span>
+          </div>
+          <div className="text-foreground font-mono">{log.content.substring(0, 150)}...</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function RecoveryPanel({ recoveryLogs, failureType, recoveryStrategy, retryCount, maxRetries }: any) {
+  return (
+    <div className="space-y-4">
+      {failureType && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded p-3">
+          <div className="text-xs font-medium text-red-400 mb-1">Failure Type</div>
+          <div className="text-sm text-foreground">{failureType}</div>
+        </div>
+      )}
+      
+      <div className="bg-surface-2 border border-border/50 rounded p-3">
+        <div className="text-xs font-medium text-foreground mb-1">Retry Status</div>
+        <div className="text-sm text-muted-foreground">
+          {retryCount || 0} / {maxRetries || 3} attempts
+        </div>
+      </div>
+
+      {recoveryLogs && recoveryLogs.length > 0 && (
+        <div>
+          <div className="text-xs font-medium text-foreground mb-2">Recovery History</div>
+          <div className="space-y-2">
+            {recoveryLogs.map((log: any, idx: number) => (
+              <div key={idx} className="text-xs border-l-2 border-orange-500/30 pl-2">
+                <div className="text-muted-foreground">
+                  {new Date(log.timestamp).toLocaleString()}
+                </div>
+                <div className="text-foreground">{log.action}: {log.error}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Task Detail Modal Component (placeholder - would be implemented separately)
 function TaskDetailModal({
   task,
@@ -1230,7 +1393,7 @@ function TaskDetailModal({
   const [reviewNotes, setReviewNotes] = useState('')
   const [reviewError, setReviewError] = useState<string | null>(null)
   const mentionTargets = useMentionTargets()
-  const [activeTab, setActiveTab] = useState<'details' | 'comments' | 'quality' | 'session'>('details')
+  const [activeTab, setActiveTab] = useState<'details' | 'comments' | 'quality' | 'session' | 'subtasks' | 'artifacts' | 'discussion' | 'logs' | 'recovery'>('details')
   const [reviewer, setReviewer] = useState('aegis')
 
   const fetchReviews = useCallback(async () => {
@@ -1557,6 +1720,84 @@ function TaskDetailModal({
                 )}
               </button>
             )}
+            {task.task_type === 'mission' && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'subtasks'}
+                aria-controls="tabpanel-subtasks"
+                onClick={() => setActiveTab('subtasks')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                  activeTab === 'subtasks'
+                    ? 'bg-secondary text-foreground'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
+                }`}
+              >
+                Subtasks
+              </button>
+            )}
+            {task.artifacts && Array.isArray(task.artifacts) && task.artifacts.length > 0 && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'artifacts'}
+                aria-controls="tabpanel-artifacts"
+                onClick={() => setActiveTab('artifacts')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                  activeTab === 'artifacts'
+                    ? 'bg-secondary text-foreground'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
+                }`}
+              >
+                Artifacts
+              </button>
+            )}
+            {task.decisions && Array.isArray(task.decisions) && task.decisions.length > 0 && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'discussion'}
+                aria-controls="tabpanel-discussion"
+                onClick={() => setActiveTab('discussion')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                  activeTab === 'discussion'
+                    ? 'bg-secondary text-foreground'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
+                }`}
+              >
+                Discussion
+              </button>
+            )}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'logs'}
+              aria-controls="tabpanel-logs"
+              onClick={() => setActiveTab('logs')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                activeTab === 'logs'
+                  ? 'bg-secondary text-foreground'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
+              }`}
+            >
+              Logs
+            </button>
+            {(task.recovery_logs || task.status === 'failed') && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === 'recovery'}
+                aria-controls="tabpanel-recovery"
+                onClick={() => setActiveTab('recovery')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                  activeTab === 'recovery'
+                    ? 'bg-secondary text-foreground'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
+                }`}
+              >
+                Recovery
+              </button>
+            )}
           </div>
 
           {activeTab === 'details' && (
@@ -1807,6 +2048,42 @@ function TaskDetailModal({
                 sessionId={task.metadata.dispatch_session_id}
                 agentName={task.assigned_to}
                 isLive={task.status === 'in_progress'}
+              />
+            </div>
+          )}
+
+          {activeTab === 'subtasks' && task.task_type === 'mission' && (
+            <div id="tabpanel-subtasks" role="tabpanel" aria-label="Subtasks" className="mt-4">
+              <SubtaskTreeView parentTaskId={task.id} />
+            </div>
+          )}
+
+          {activeTab === 'artifacts' && task.artifacts && Array.isArray(task.artifacts) && task.artifacts.length > 0 && (
+            <div id="tabpanel-artifacts" role="tabpanel" aria-label="Artifacts" className="mt-4">
+              <ArtifactList artifacts={task.artifacts} />
+            </div>
+          )}
+
+          {activeTab === 'discussion' && task.decisions && Array.isArray(task.decisions) && task.decisions.length > 0 && (
+            <div id="tabpanel-discussion" role="tabpanel" aria-label="Discussion" className="mt-4">
+              <DecisionThread decisions={task.decisions} />
+            </div>
+          )}
+
+          {activeTab === 'logs' && (
+            <div id="tabpanel-logs" role="tabpanel" aria-label="Logs" className="mt-4">
+              <TaskExecutionLogs taskId={task.id} />
+            </div>
+          )}
+
+          {activeTab === 'recovery' && (task.recovery_logs || task.status === 'failed') && (
+            <div id="tabpanel-recovery" role="tabpanel" aria-label="Recovery" className="mt-4">
+              <RecoveryPanel 
+                recoveryLogs={task.recovery_logs || []}
+                failureType={task.failure_type}
+                recoveryStrategy={task.recovery_strategy}
+                retryCount={task.retry_count}
+                maxRetries={task.max_retries}
               />
             </div>
           )}
