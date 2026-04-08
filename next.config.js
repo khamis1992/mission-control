@@ -6,7 +6,7 @@ const nextConfig = {
   outputFileTracingExcludes: {
     '/*': ['./.data/**/*'],
   },
-  turbopack: {},
+  
   // Transpile ESM-only packages so they resolve correctly in all environments
   transpilePackages: ['react-markdown', 'remark-gfm'],
   
@@ -31,4 +31,4 @@ const nextConfig = {
   
 };
 
-module.exports = withNextIntl(nextConfig);
+module.exports = withNextIntl(nextConfig)

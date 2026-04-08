@@ -5,12 +5,13 @@ import { logger } from '@/lib/logger'
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params
   const auth = requireRole(request, 'operator')
   if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
 
-  const taskId = parseInt(params.id, 10)
+  const taskId = parseInt(id, 10)
   if (!Number.isFinite(taskId)) {
     return NextResponse.json({ error: 'Invalid task ID' }, { status: 400 })
   }
