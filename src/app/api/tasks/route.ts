@@ -346,7 +346,7 @@ export async function POST(request: NextRequest) {
     if (parsedTask.workflow_id) {
       const workflowId = parsedTask.workflow_id
       setTimeout(() => {
-        import('../lib/workflow-executor').then(({ workflowExecutor }) => {
+        import('@/lib/workflow-executor').then(({ workflowExecutor }) => {
           workflowExecutor.execute(workflowId, {
             task_id: taskId,
             workspace_id: parsedTask.workspace_id,

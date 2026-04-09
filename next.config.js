@@ -6,7 +6,10 @@ const nextConfig = {
   outputFileTracingExcludes: {
     '/*': ['./.data/**/*'],
   },
-  
+
+  // Disable Turbopack to fix Google fonts module resolution issue
+  turbopack: false,
+
   // Transpile ESM-only packages so they resolve correctly in all environments
   transpilePackages: ['react-markdown', 'remark-gfm'],
   
