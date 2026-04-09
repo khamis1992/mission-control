@@ -21,6 +21,7 @@ export type EventType =
   | 'task.checkpoint_saved'
   | 'task.recovering'
   | 'task.escalated'
+  | 'task.skipped'
   | 'task.artifact_created'
   | 'task.progress'
   | 'task.parallel_group_completed'
@@ -44,6 +45,14 @@ export type EventType =
   | 'run.completed'
   | 'run.eval_attached'
   | 'session.updated'
+  | 'agent.trace'
+  | 'agent.cost_update'
+  | 'tool_call'
+  | 'mcp.server_installed'
+  | 'mcp.server_removed'
+  | 'mcp.server_updated'
+  | 'workflow.created'
+  | 'workflow.executed'
 
 class ServerEventBus extends EventEmitter {
   private static instance: ServerEventBus | null = null

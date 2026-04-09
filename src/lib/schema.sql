@@ -101,6 +101,19 @@ CREATE TABLE IF NOT EXISTS quality_reviews (
     FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
 );
 
+-- Approval requests (HITL approval workflow requests)
+CREATE TABLE IF NOT EXISTS approval_requests (
+    id TEXT PRIMARY KEY,
+    gate_id TEXT NOT NULL,
+    task_id INTEGER NOT NULL,
+    agent_id TEXT NOT NULL,
+    payload TEXT,
+    reason TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    expires_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    FOREIGN KEY (gate_id) REFERENCES approval_gates(id) ON DELETE CASCADE
+);
 
 -- Gateway health logs (captured each time MC probes a gateway)
 CREATE TABLE IF NOT EXISTS gateway_health_logs (

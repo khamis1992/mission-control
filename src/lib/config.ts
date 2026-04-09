@@ -66,6 +66,10 @@ const defaultMemoryDir = (() => {
 const resolvedGnapRepoPath =
   process.env.GNAP_REPO_PATH || path.join(configuredDataDir, '.gnap')
 
+export function getDataDir(): string {
+  return config.dataDir;
+}
+
 export const config = {
   claudeHome:
     process.env.MC_CLAUDE_HOME ||

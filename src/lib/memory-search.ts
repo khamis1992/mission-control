@@ -17,9 +17,41 @@ import { getDatabase } from '@/lib/db'
 import { scanMemoryFiles, type MemoryFileInfo } from '@/lib/memory-utils'
 import { logger } from '@/lib/logger'
 
+// ─── Default Synonyms ─────────────────────────────────────────────
+
+const DEFAULT_SYNONYMS: Array<[string, string]> = [
+  ['task', 'issue'],
+  ['issue', 'task'],
+  ['file', 'document'],
+  ['document', 'file'],
+  ['memory', 'knowledge'],
+  ['knowledge', 'memory'],
+  ['agent', 'assistant'],
+  ['assistant', 'agent'],
+  ['config', 'configuration'],
+  ['configuration', 'config'],
+  ['auth', 'authentication'],
+  ['authentication', 'auth'],
+]
+
+function initializeDefaultSynonyms(db: Database.Database): void {
+  const count = db.prepare('SELECT COUNT(*) as cnt FROM memory_fts_synonyms').get() as { cnt: number }
+  if (count.cnt === 0) {
+    const stmt = db.prepare('INSERT INTO memory_fts_synonyms (term, synonym) VALUES (?, ?)')
+    db.transaction(() => {
+      for (const [term, synonym] of DEFAULT_SYNONYMS) {
+        stmt.run(term, synonym)
+      }
+    })()
+  }
+}
+
 // ─── Schema ──────────────────────────────────────────────────────
 
 export function ensureFtsTable(db: Database.Database): void {
+  // Note: 'porter unicode61' provides automatic stemming
+  // - unicode61: Handles unicode characters, case folding, diacritics
+  // - porter: Applies Porter stemming algorithm to reduce words to roots
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
       path,
@@ -34,6 +66,16 @@ export function ensureFtsTable(db: Database.Database): void {
       value TEXT
     )
   `)
+  // Synonyms table for query expansion
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memory_fts_synonyms (
+      term TEXT NOT NULL,
+      synonym TEXT NOT NULL,
+      PRIMARY KEY (term, synonym)
+    )
+  `)
+  // Initialize default synonyms if not already present
+  initializeDefaultSynonyms(db)
 }
 
 // ─── Index management ────────────────────────────────────────────
@@ -176,7 +218,8 @@ export async function searchMemory(
   const db = getDatabase()
   const limit = opts?.limit ?? 20
 
-  const sanitized = sanitizeFtsQuery(query)
+  const expandedQuery = expandQueryWithSynonyms(db, query)
+  const sanitized = sanitizeFtsQuery(expandedQuery)
 
   let results: SearchResult[] = []
   let total = 0
@@ -186,8 +229,8 @@ export async function searchMemory(
       SELECT
         path,
         title,
-        snippet(memory_fts, 2, '<mark>', '</mark>', '...', 40) as snippet,
-        bm25(memory_fts, 1.0, 5.0, 1.0) as rank
+        snippet(memory_fts, 2, '<mark>', '</mark>', '...', 80) as snippet,
+        bm25(memory_fts, 1.0, 4.0, 1.0) as rank
       FROM memory_fts
       WHERE memory_fts MATCH ?
       ORDER BY rank
@@ -211,8 +254,8 @@ export async function searchMemory(
       const fallbackQuery = `"${query.replace(/"/g, '""')}"`
       const rows = db.prepare(`
         SELECT path, title,
-          snippet(memory_fts, 2, '<mark>', '</mark>', '...', 40) as snippet,
-          bm25(memory_fts, 1.0, 5.0, 1.0) as rank
+          snippet(memory_fts, 2, '<mark>', '</mark>', '...', 80) as snippet,
+          bm25(memory_fts, 1.0, 4.0, 1.0) as rank
         FROM memory_fts WHERE memory_fts MATCH ? ORDER BY rank LIMIT ?
       `).all(fallbackQuery, limit) as Array<{ path: string; title: string; snippet: string; rank: number }>
       results = rows.map((r) => ({ path: r.path, title: r.title, snippet: r.snippet, rank: Math.abs(r.rank) }))
@@ -238,14 +281,34 @@ export async function searchMemory(
   }
 }
 
-/**
- * Sanitize a user query for FTS5 syntax.
- */
+function expandQueryWithSynonyms(db: Database.Database, query: string): string {
+  const words = query.split(/\s+/).filter(Boolean)
+  if (words.length === 0) return query
+
+  const expandedTerms: string[] = []
+  
+  for (const word of words) {
+    const lowerWord = word.replace(/\*$/, '').toLowerCase()
+     
+    const synonymRows = db.prepare(
+      'SELECT synonym FROM memory_fts_synonyms WHERE term = ?'
+    ).all(lowerWord) as Array<{ synonym: string }>
+
+    if (synonymRows.length > 0) {
+      const synonyms = [word, ...synonymRows.map(r => r.synonym)]
+      expandedTerms.push(`(${synonyms.join(' OR ')})`)
+    } else {
+      expandedTerms.push(word)
+    }
+  }
+
+  return expandedTerms.join(' ')
+}
+
 function sanitizeFtsQuery(query: string): string {
   const trimmed = query.trim()
   if (!trimmed) return '""'
 
-  // If user is already using FTS5 operators, pass through
   if (/\b(AND|OR|NOT|NEAR)\b/.test(trimmed) || trimmed.includes('"')) {
     return trimmed
   }
@@ -255,6 +318,5 @@ function sanitizeFtsQuery(query: string): string {
     return `${words[0]}*`
   }
 
-  // Multiple words — prefix matching with implicit AND
   return words.map((w) => `${w}*`).join(' ')
 }

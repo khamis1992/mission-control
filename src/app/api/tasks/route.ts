@@ -342,6 +342,26 @@ export async function POST(request: NextRequest) {
       }).catch(err => logger.error({ err, taskId }, 'Failed to trigger subtask generation'))
     }
 
+    // Workflow trigger: If task has workflow_id, start workflow execution
+    if (parsedTask.workflow_id) {
+      const workflowId = parsedTask.workflow_id
+      setTimeout(() => {
+        import('../lib/workflow-executor').then(({ workflowExecutor }) => {
+          workflowExecutor.execute(workflowId, {
+            task_id: taskId,
+            workspace_id: parsedTask.workspace_id,
+            task_title: parsedTask.title,
+            task_description: parsedTask.description || ''
+          }).then(result => {
+            logger.info({ workflowId, taskId }, 'Workflow execution completed')
+          }).catch(err => {
+            logger.error({ workflowId, taskId, err }, 'Workflow execution failed')
+          })
+        }).catch(err => {
+          logger.error({ workflowId, taskId, err }, 'Failed to import workflow executor')
+        })
+      }, 100)
+    }
     return NextResponse.json({ task: parsedTask }, { status: 201 });
   } catch (error) {
     logger.error({ err: error }, 'POST /api/tasks error');

@@ -93,12 +93,14 @@ export default async function RootLayout({
   const messages = await getMessages()
 
   return (
-    <html lang={locale} dir={locale === 'ar' ? 'rtl' : 'ltr'} className="dark" suppressHydrationWarning>
-      <head>
+    <html lang={locale} dir={locale === 'ar' ? 'rtl' : 'ltr'} suppressHydrationWarning>
+      <head suppressHydrationWarning>
         {/* Blocking script to set 'dark' class before first paint, preventing FOUC.
-            Content is a static string literal — no user input, no XSS vector. */}
+            Content is a static string literal — no user input, no XSS vector.
+            Using suppressHydrationWarning because nonce differs between server and client. */}
         <script
           nonce={nonce}
+          suppressHydrationWarning
           dangerouslySetInnerHTML={{
             __html: `(function(){try{var t=localStorage.getItem('theme')||'void';var light=['light','paper'];if(light.indexOf(t)===-1)document.documentElement.classList.add('dark')}catch(e){}})()`,
           }}

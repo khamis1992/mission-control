@@ -64,6 +64,8 @@ export const createTaskSchema = z.object({
   artifacts: z.array(z.record(z.string(), z.unknown())).max(100).optional(),
   decisions: z.array(z.record(z.string(), z.unknown())).max(100).optional(),
   recovery_logs: z.array(z.record(z.string(), z.unknown())).max(100).optional(),
+  workflow_id: z.string().max(100).optional(),
+  agent_personality: z.string().max(200).optional(),
 })
 
 export const updateTaskSchema = createTaskSchema.partial()
@@ -210,4 +212,24 @@ export const githubSyncSchema = z.object({
   body: z.string().optional(),
   comment: z.string().optional(),
   project_id: z.number().optional(),
+})
+
+export const createApprovalGateSchema = z.object({
+  task_id: z.number().int().positive(),
+  agent_id: z.string().min(1, 'Agent ID is required').max(100),
+  name: z.string().min(1, 'Gate name is required').max(200),
+  condition: z.enum(['before_tool', 'after_tool', 'on_error', 'on_success', 'manual']).default('before_tool'),
+  mode: z.enum(['unanimous', 'any', 'round_robin', 'first_available']).default('any'),
+  approvers: z.array(z.string().min(1).max(100)).max(50).default([]),
+  timeout: z.number().int().min(60).max(86400).default(3600),
+  escalation_path: z.string().max(500).optional(),
+})
+
+export const createApprovalRequestSchema = z.object({
+  gate_id: z.number().int().positive(),
+  task_id: z.number().int().positive(),
+  agent_id: z.string().min(1, 'Agent ID is required').max(100),
+  payload: z.record(z.string(), z.unknown()),
+  reason: z.string().max(2000).optional(),
+  approval_timeout: z.number().int().min(60).max(86400).default(3600),
 })

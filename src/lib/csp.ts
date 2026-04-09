@@ -1,18 +1,23 @@
 export function buildMissionControlCsp(input: { nonce: string; googleEnabled: boolean }): string {
   const { nonce, googleEnabled } = input
 
+  // Google Fonts domains are needed for next/font/google in dev mode
+  // In production, fonts are self-hosted, but we include them for safety
+  const fontSrc = `'self' data: https://fonts.gstatic.com`
+  const styleSrcElem = `'self' 'unsafe-inline' https://fonts.googleapis.com`
+
   return [
     `default-src 'self'`,
     `base-uri 'self'`,
     `object-src 'none'`,
     `frame-ancestors 'none'`,
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' blob:${googleEnabled ? ' https://accounts.google.com' : ''}`,
-    `style-src 'self' 'unsafe-inline'`,
-    `style-src-elem 'self' 'unsafe-inline'`,
+    `style-src 'self' 'unsafe-inline'${googleEnabled ? ' https://fonts.googleapis.com' : ''}`,
+    `style-src-elem ${styleSrcElem}`,
     `style-src-attr 'unsafe-inline'`,
     `connect-src 'self' ws: wss: http://127.0.0.1:* http://localhost:* https://cdn.jsdelivr.net`,
     `img-src 'self' data: blob:${googleEnabled ? ' https://*.googleusercontent.com https://lh3.googleusercontent.com' : ''}`,
-    `font-src 'self' data:`,
+    `font-src ${fontSrc}`,
     `frame-src 'self'${googleEnabled ? ' https://accounts.google.com' : ''}`,
     `worker-src 'self' blob:`,
   ].join('; ')

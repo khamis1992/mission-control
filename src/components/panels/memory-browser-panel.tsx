@@ -7,6 +7,8 @@ import { Loader } from '@/components/ui/loader'
 import { useMissionControl } from '@/store'
 import { createClientLogger } from '@/lib/client-logger'
 import { MemoryGraph } from './memory-graph'
+import { UnifiedSearchPanel } from '@/components/search/unified-search-panel'
+import { useFocusTrap } from '@/lib/use-focus-trap'
 
 const log = createClientLogger('MemoryBrowser')
 
@@ -124,7 +126,7 @@ export function MemoryBrowserPanel() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
-  const [activeView, setActiveView] = useState<'files' | 'graph' | 'health' | 'pipeline' | 'hermes'>(!isLocal ? 'graph' : 'files')
+  const [activeView, setActiveView] = useState<'files' | 'graph' | 'health' | 'pipeline' | 'hermes' | 'search'>(!isLocal ? 'graph' : 'files')
   const [hermesMemory, setHermesMemory] = useState<{ agentMemory: string | null; userMemory: string | null; agentMemorySize: number; userMemorySize: number; agentMemoryEntries: number; userMemoryEntries: number } | null>(null)
   const [hermesInstalled, setHermesInstalled] = useState<boolean | null>(null)
   const [isLoadingHermes, setIsLoadingHermes] = useState(false)
@@ -138,6 +140,9 @@ export function MemoryBrowserPanel() {
   const [mocGroups, setMocGroups] = useState<MOCGroup[]>([])
   const [isRunningPipeline, setIsRunningPipeline] = useState(false)
   const [isHydratingTree, setIsHydratingTree] = useState(false)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; file: MemoryFile } | null>(null)
+  const [showCreateTaskModal, setShowCreateTaskModal] = useState(false)
+  const [taskCreationContext, setTaskCreationContext] = useState<{ path: string; preview: string } | null>(null)
   const memoryFilesRef = useRef(memoryFiles)
 
   useEffect(() => {
@@ -409,6 +414,52 @@ export function MemoryBrowserPanel() {
     }
   }
 
+  const handleContextMenu = (e: React.MouseEvent, file: MemoryFile) => {
+    if (file.type === 'file') {
+      e.preventDefault()
+      e.stopPropagation()
+      setContextMenu({ x: e.clientX, y: e.clientY, file })
+    }
+  }
+
+  const handleCreateTaskFromFile = async (file: MemoryFile) => {
+    setContextMenu(null)
+    
+    // Load the file content for preview
+    try {
+      const response = await fetch(`/api/memory?action=content&path=${encodeURIComponent(file.path)}`)
+      const data = await response.json()
+      const preview = data.content ? data.content.substring(0, 500) : ''
+      setTaskCreationContext({ path: file.path, preview })
+      setShowCreateTaskModal(true)
+    } catch (error) {
+      log.error('Failed to load file content:', error)
+      // Still open modal with path only
+      setTaskCreationContext({ path: file.path, preview: '' })
+      setShowCreateTaskModal(true)
+    }
+  }
+
+  // Close context menu on outside click
+  useEffect(() => {
+    const handleClickOutside = () => setContextMenu(null)
+    if (contextMenu) {
+      document.addEventListener('click', handleClickOutside)
+      return () => document.removeEventListener('click', handleClickOutside)
+    }
+  }, [contextMenu])
+
+  // Close context menu on escape
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setContextMenu(null)
+    }
+    if (contextMenu) {
+      document.addEventListener('keydown', handleEscape)
+      return () => document.removeEventListener('keydown', handleEscape)
+    }
+  }, [contextMenu])
+
   const renderTree = (files: MemoryFile[], depth = 0): React.ReactElement[] => {
     return files.map((file) => {
       const isDir = file.type === 'directory'
@@ -420,6 +471,7 @@ export function MemoryBrowserPanel() {
             className={`flex items-center gap-1 py-[3px] pr-2 cursor-pointer text-[13px] font-mono hover:bg-[hsl(var(--surface-2))] rounded-sm transition-colors duration-75 ${isSelected ? 'bg-[hsl(var(--surface-2))] text-foreground' : 'text-muted-foreground'}`}
             style={{ paddingLeft: `${8 + depth * 14}px` }}
             onClick={() => void (isDir ? toggleFolder(file.path, file.children === undefined) : loadFileContent(file.path))}
+            onContextMenu={(e) => handleContextMenu(e, file)}
           >
             {isDir ? (
               <span className={`text-[10px] w-3 text-center shrink-0 transition-transform duration-100 ${isExpanded ? 'rotate-90' : ''}`}>&#9656;</span>
@@ -530,7 +582,7 @@ export function MemoryBrowserPanel() {
     return elements
   }
 
-  const viewTabs = ['files', ...(!isLocal ? ['graph'] : []), 'health', 'pipeline', ...(hermesInstalled ? ['hermes'] : [])] as const
+  const viewTabs = ['files', ...(!isLocal ? ['graph'] : []), 'health', 'pipeline', ...(hermesInstalled ? ['hermes'] : []), 'search'] as const
 
   return (
     <div className="h-[calc(100vh-3.5rem)] flex flex-col overflow-hidden">
@@ -609,6 +661,10 @@ export function MemoryBrowserPanel() {
             <div className="flex-1 overflow-auto p-6">
               <HermesMemoryView data={hermesMemory} isLoading={isLoadingHermes} onRefresh={() => { setHermesMemory(null); setIsLoadingHermes(false) }} />
             </div>
+          ) : activeView === 'search' ? (
+            <div className="flex-1 overflow-hidden">
+              <UnifiedSearchPanel />
+            </div>
           ) : (
             <div className="flex-1 flex min-h-0">
               <div className="flex-1 flex flex-col min-h-0">
@@ -679,6 +735,46 @@ export function MemoryBrowserPanel() {
 
       {showCreateModal && <CreateFileModal onClose={() => setShowCreateModal(false)} onCreate={createNewFile} />}
       {showDeleteConfirm && selectedMemoryFile && <DeleteConfirmModal fileName={selectedMemoryFile} onClose={() => setShowDeleteConfirm(false)} onConfirm={deleteFile} />}
+      
+      {/* Context Menu */}
+      {contextMenu && (
+        <div
+          className="fixed bg-[hsl(var(--surface-1))] border border-border rounded-md shadow-lg py-1 z-50"
+          style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px`, minWidth: '150px' }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={() => handleCreateTaskFromFile(contextMenu.file)}
+            className="w-full px-3 py-1.5 text-left text-xs font-mono text-foreground hover:bg-[hsl(var(--surface-2))] transition-colors"
+          >
+            Create Task from File
+          </button>
+          <button
+            onClick={() => {
+              loadFileContent(contextMenu.file.path)
+              setContextMenu(null)
+            }}
+            className="w-full px-3 py-1.5 text-left text-xs font-mono text-foreground hover:bg-[hsl(var(--surface-2))] transition-colors"
+          >
+            Open File
+          </button>
+        </div>
+      )}
+
+      {showCreateTaskModal && taskCreationContext && (
+        <CreateTaskFromMemoryModal
+          memoryPath={taskCreationContext.path}
+          contentPreview={taskCreationContext.preview}
+          onClose={() => {
+            setShowCreateTaskModal(false)
+            setTaskCreationContext(null)
+          }}
+          onCreated={() => {
+            setShowCreateTaskModal(false)
+            setTaskCreationContext(null)
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -1010,6 +1106,133 @@ function DeleteConfirmModal({ fileName, onClose, onConfirm }: { fileName: string
           <Button onClick={onConfirm} variant="destructive" size="sm" className="flex-1">{t('delete')}</Button>
           <Button onClick={onClose} variant="secondary" size="sm">{t('cancel')}</Button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function CreateTaskFromMemoryModal({ memoryPath, contentPreview, onClose, onCreated }: { memoryPath: string; contentPreview: string; onClose: () => void; onCreated: () => void }) {
+  const t = useTranslations('memoryBrowser')
+  const [title, setTitle] = useState('')
+  const [description, setDescription] = useState('')
+  const [priority, setPriority] = useState<'low' | 'medium' | 'high' | 'critical'>('medium')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!title.trim() || isSubmitting) return
+
+    setIsSubmitting(true)
+    try {
+      const response = await fetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: title.trim(),
+          description: `${description}\n\n---\nCreated from memory file: ${memoryPath}`,
+          priority,
+          status: 'inbox',
+        }),
+      })
+
+      if (!response.ok) throw new Error('Failed to create task')
+
+      const task = await response.json()
+
+      const linkResponse = await fetch('/api/task-memory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: task.id,
+          memory_path: memoryPath,
+          link_context: 'created_from',
+          created_by: 'memory-browser',
+        }),
+      })
+
+      if (!linkResponse.ok) {
+        log.error('Failed to create task-memory link, but task was created')
+      }
+
+      onCreated()
+    } catch (error) {
+      log.error('Failed to create task:', error)
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const dialogRef = useFocusTrap(onClose)
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" className="bg-[hsl(var(--surface-1))] border border-border rounded-lg max-w-lg w-full p-5 shadow-xl">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-sm font-semibold text-foreground font-mono">Create Task from Memory</h3>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-lg leading-none">x</button>
+        </div>
+        
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div>
+            <label className="block text-[11px] font-mono text-muted-foreground mb-1">Memory File</label>
+            <div className="text-xs font-mono text-foreground bg-[hsl(var(--surface-0))] border border-border/50 rounded px-2 py-1.5">
+              {memoryPath}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-mono text-muted-foreground mb-1">Task Title *</label>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              className="w-full px-2.5 py-1.5 text-xs font-mono bg-[hsl(var(--surface-0))] border border-border/50 rounded text-foreground focus:outline-none focus:border-primary/30"
+              placeholder="Enter task title"
+              autoFocus
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-mono text-muted-foreground mb-1">Description</label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="w-full h-20 px-2.5 py-1.5 text-xs font-mono bg-[hsl(var(--surface-0))] border border-border/50 rounded text-foreground focus:outline-none focus:border-primary/30 resize-none"
+              placeholder="Optional description"
+            />
+          </div>
+
+          {contentPreview && (
+            <div>
+              <label className="block text-[11px] font-mono text-muted-foreground mb-1">File Preview (first 500 chars)</label>
+              <div className="text-[10px] font-mono text-muted-foreground bg-[hsl(var(--surface-0))] border border-border/50 rounded px-2 py-1.5 max-h-24 overflow-y-auto whitespace-pre-wrap">
+                {contentPreview}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-[11px] font-mono text-muted-foreground mb-1">Priority</label>
+            <select
+              value={priority}
+              onChange={(e) => setPriority(e.target.value as any)}
+              className="w-full px-2.5 py-1.5 text-xs font-mono bg-[hsl(var(--surface-0))] border border-border/50 rounded text-foreground focus:outline-none focus:border-primary/30"
+            >
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+
+          <div className="flex gap-2 pt-2">
+            <Button type="submit" size="sm" className="flex-1" disabled={!title.trim() || isSubmitting}>
+              {isSubmitting ? 'Creating...' : 'Create Task'}
+            </Button>
+            <Button type="button" variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
+          </div>
+        </form>
       </div>
     </div>
   )

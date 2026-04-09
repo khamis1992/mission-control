@@ -1250,6 +1250,103 @@ function SubtaskTreeView({ parentTaskId }: { parentTaskId: number }) {
   )
 }
 
+function AgentStatusPanel({ parentTaskId, task, agents }: { parentTaskId: number, task: Task, agents: Agent[] }) {
+  const [subtasks, setSubtasks] = useState<Task[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetch(`/api/tasks?parent_task_id=${parentTaskId}`)
+      .then(r => r.json())
+      .then(data => {
+        setSubtasks(data.tasks || [])
+        setLoading(false)
+      })
+      .catch(() => setLoading(false))
+  }, [parentTaskId])
+
+  if (loading) return <div className="text-muted-foreground">Loading agents...</div>
+
+  // Group subtasks by agent_role
+  const roleGroups: Record<string, Task[]> = {}
+  subtasks.forEach(st => {
+    const role = st.agent_role || 'unassigned'
+    if (!roleGroups[role]) roleGroups[role] = []
+    roleGroups[role].push(st)
+  })
+
+  // Get agents by role
+  const agentsByRole: Record<string, Agent[]> = {}
+  agents.forEach(agent => {
+    if (!agentsByRole[agent.role]) agentsByRole[agent.role] = []
+    agentsByRole[agent.role].push(agent)
+  })
+
+  return (
+    <div className="space-y-3">
+      <div className="text-xs text-muted-foreground mb-2">
+        Agent assignments for {subtasks.length} subtasks
+      </div>
+      
+      {Object.entries(roleGroups).map(([role, tasks]) => {
+        const roleAgents = agentsByRole[role] || []
+        const assignedAgent = tasks[0]?.assigned_to
+        const agent = assignedAgent ? agents.find(a => a.name === assignedAgent) : null
+        
+        return (
+          <div key={role} className="border border-border/50 rounded p-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="font-medium text-foreground capitalize">{role}</span>
+              <span className="text-[10px] px-2 py-1 rounded bg-surface-2 text-muted-foreground">
+                {tasks.length} task{tasks.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+            
+            {agent ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className={`inline-block h-2 w-2 rounded-full ${
+                    agent.status === 'busy' ? 'bg-yellow-400' :
+                    agent.status === 'idle' ? 'bg-green-400' :
+                    agent.status === 'offline' ? 'bg-gray-400' :
+                    'bg-red-400'
+                  }`} />
+                  <span className="text-sm text-foreground">{agent.name}</span>
+                  <span className="text-[10px] text-muted-foreground">({agent.status})</span>
+                </div>
+                
+                <div className="text-[10px] text-muted-foreground space-y-1">
+                  {tasks.map(t => (
+                    <div key={t.id} className="flex items-center justify-between">
+                      <span className="truncate">{t.title}</span>
+                      <span className={`px-1.5 py-0.5 rounded ${
+                    t.status === 'done' ? 'bg-green-500/20 text-green-400' :
+                    t.status === 'in_progress' ? 'bg-yellow-500/20 text-yellow-400' :
+                    t.status === 'failed' ? 'bg-red-500/20 text-red-400' :
+                    'bg-surface-2 text-muted-foreground'
+                  }`}>
+                        {t.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground">
+                No agent assigned
+                {roleAgents.length > 0 && (
+                  <span className="ml-1">
+                    ({roleAgents.length} {role} agent{roleAgents.length !== 1 ? 's' : ''} available)
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function ArtifactList({ artifacts }: { artifacts: any[] }) {
   if (artifacts.length === 0) return <div className="text-muted-foreground">No artifacts yet</div>
 
@@ -1377,7 +1474,7 @@ function TaskDetailModal({
 }) {
   const t = useTranslations('taskBoard')
   const router = useRouter()
-  const { currentUser } = useMissionControl()
+  const { currentUser, setSelectedMemoryFile, setMemoryContent } = useMissionControl()
   const commentAuthor = currentUser?.username || 'system'
   const resolvedProjectName =
     task.project_name ||
@@ -1393,8 +1490,15 @@ function TaskDetailModal({
   const [reviewNotes, setReviewNotes] = useState('')
   const [reviewError, setReviewError] = useState<string | null>(null)
   const mentionTargets = useMentionTargets()
-  const [activeTab, setActiveTab] = useState<'details' | 'comments' | 'quality' | 'session' | 'subtasks' | 'artifacts' | 'discussion' | 'logs' | 'recovery'>('details')
+  const [activeTab, setActiveTab] = useState<'details' | 'comments' | 'quality' | 'session' | 'subtasks' | 'agents' | 'artifacts' | 'discussion' | 'memory' | 'logs' | 'recovery'>('details')
   const [reviewer, setReviewer] = useState('aegis')
+  const [showDecisionForm, setShowDecisionForm] = useState(false)
+  const [decisionType, setDecisionType] = useState('planning')
+  const [decisionText, setDecisionText] = useState('')
+  const [decisionAuthor, setDecisionAuthor] = useState('')
+  const [memoryLinks, setMemoryLinks] = useState<{id: number; task_id: number; memory_path: string; link_context: string; created_by: string; created_at: number}[]>([])
+  const [loadingMemoryLinks, setLoadingMemoryLinks] = useState(false)
+  const [memoryLinksError, setMemoryLinksError] = useState<string | null>(null)
 
   const fetchReviews = useCallback(async () => {
     try {
@@ -1404,6 +1508,21 @@ function TaskDetailModal({
       setReviews(data.reviews || [])
     } catch (error) {
       setReviewError('Failed to load quality reviews')
+    }
+  }, [task.id])
+
+  const fetchMemoryLinks = useCallback(async () => {
+    try {
+      setLoadingMemoryLinks(true)
+      setMemoryLinksError(null)
+      const response = await fetch(`/api/task-memory?task_id=${task.id}`)
+      if (!response.ok) throw new Error('Failed to fetch memory links')
+      const data = await response.json()
+      setMemoryLinks(data.links || [])
+    } catch (error) {
+      setMemoryLinksError('Failed to load memory links')
+    } finally {
+      setLoadingMemoryLinks(false)
     }
   }, [task.id])
 
@@ -1427,6 +1546,11 @@ function TaskDetailModal({
   useEffect(() => {
     fetchReviews()
   }, [fetchReviews])
+  useEffect(() => {
+    if (activeTab === 'memory') {
+      fetchMemoryLinks()
+    }
+  }, [activeTab, fetchMemoryLinks])
   
   useSmartPoll(fetchComments, 15000)
 
@@ -1447,9 +1571,36 @@ function TaskDetailModal({
       if (!response.ok) throw new Error('Failed to add comment')
       setCommentText('')
       await fetchComments()
-      onUpdate() // refreshes task data (picks up auto-assignment from @mention)
+      onUpdate()
     } catch (error) {
       setCommentError('Failed to add comment')
+    }
+  }
+
+  const handleCreateDecision = async () => {
+    if (!decisionText.trim()) return
+
+    try {
+      const decision = {
+        type: decisionType,
+        summary: decisionText,
+        content: decisionAuthor,
+        timestamp: Date.now()
+      }
+
+      const response = await fetch(`/api/tasks/${task.id}/decisions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(decision)
+      })
+      if (!response.ok) throw new Error('Failed to add decision')
+      setDecisionText('')
+      setDecisionType('planning')
+      setDecisionAuthor('')
+      setShowDecisionForm(false)
+      onUpdate()
+    } catch (error) {
+      alert('Failed to add decision')
     }
   }
 
@@ -1720,22 +1871,38 @@ function TaskDetailModal({
                 )}
               </button>
             )}
-            {task.task_type === 'mission' && (
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === 'subtasks'}
-                aria-controls="tabpanel-subtasks"
-                onClick={() => setActiveTab('subtasks')}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                  activeTab === 'subtasks'
-                    ? 'bg-secondary text-foreground'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
-                }`}
-              >
-                Subtasks
-              </button>
-            )}
+             {task.task_type === 'mission' && (
+               <button
+                 type="button"
+                 role="tab"
+                 aria-selected={activeTab === 'subtasks'}
+                 aria-controls="tabpanel-subtasks"
+                 onClick={() => setActiveTab('subtasks')}
+                 className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                   activeTab === 'subtasks'
+                     ? 'bg-secondary text-foreground'
+                     : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
+                 }`}
+               >
+                 Subtasks
+               </button>
+             )}
+             {task.task_type === 'mission' && task.parent_task_id === undefined && (
+               <button
+                 type="button"
+                 role="tab"
+                 aria-selected={activeTab === 'agents'}
+                 aria-controls="tabpanel-agents"
+                 onClick={() => setActiveTab('agents')}
+                 className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                   activeTab === 'agents'
+                     ? 'bg-secondary text-foreground'
+                     : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
+                 }`}
+               >
+                 Agents
+               </button>
+             )}
             {task.artifacts && Array.isArray(task.artifacts) && task.artifacts.length > 0 && (
               <button
                 type="button"
@@ -1752,7 +1919,7 @@ function TaskDetailModal({
                 Artifacts
               </button>
             )}
-            {task.decisions && Array.isArray(task.decisions) && task.decisions.length > 0 && (
+             {task.decisions && Array.isArray(task.decisions) && task.decisions.length > 0 && (
               <button
                 type="button"
                 role="tab"
@@ -1768,6 +1935,23 @@ function TaskDetailModal({
                 Discussion
               </button>
             )}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'memory'}
+              aria-controls="tabpanel-memory"
+              onClick={() => setActiveTab('memory')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                activeTab === 'memory'
+                  ? 'bg-secondary text-foreground'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
+              }`}
+            >
+              Memory
+              {memoryLinks.length > 0 && (
+                <span className="ml-1.5 text-[10px] text-muted-foreground/60">{memoryLinks.length}</span>
+              )}
+            </button>
             <button
               type="button"
               role="tab"
@@ -2052,11 +2236,17 @@ function TaskDetailModal({
             </div>
           )}
 
-          {activeTab === 'subtasks' && task.task_type === 'mission' && (
-            <div id="tabpanel-subtasks" role="tabpanel" aria-label="Subtasks" className="mt-4">
-              <SubtaskTreeView parentTaskId={task.id} />
-            </div>
-          )}
+           {activeTab === 'subtasks' && task.task_type === 'mission' && (
+             <div id="tabpanel-subtasks" role="tabpanel" aria-label="Subtasks" className="mt-4">
+               <SubtaskTreeView parentTaskId={task.id} />
+             </div>
+           )}
+
+           {activeTab === 'agents' && task.task_type === 'mission' && task.parent_task_id === undefined && (
+             <div id="tabpanel-agents" role="tabpanel" aria-label="Agents" className="mt-4">
+               <AgentStatusPanel parentTaskId={task.id} task={task} agents={agents} />
+             </div>
+           )}
 
           {activeTab === 'artifacts' && task.artifacts && Array.isArray(task.artifacts) && task.artifacts.length > 0 && (
             <div id="tabpanel-artifacts" role="tabpanel" aria-label="Artifacts" className="mt-4">
@@ -2064,13 +2254,159 @@ function TaskDetailModal({
             </div>
           )}
 
-          {activeTab === 'discussion' && task.decisions && Array.isArray(task.decisions) && task.decisions.length > 0 && (
-            <div id="tabpanel-discussion" role="tabpanel" aria-label="Discussion" className="mt-4">
-              <DecisionThread decisions={task.decisions} />
-            </div>
-          )}
+           {activeTab === 'discussion' && (
+             <div id="tabpanel-discussion" role="tabpanel" aria-label="Discussion" className="mt-4 space-y-4">
+               {/* Decision creation form */}
+               {showDecisionForm ? (
+                 <div className="border border-border rounded p-3 bg-surface-1">
+                   <h4 className="text-xs font-medium text-foreground mb-3">Add New Decision</h4>
+                   <div className="space-y-2">
+                     <div>
+                       <label className="block text-[10px] text-muted-foreground mb-1">Decision Type</label>
+                       <select
+                         value={decisionType}
+                         onChange={(e) => setDecisionType(e.target.value)}
+                         className="w-full bg-card border border-border rounded px-2 py-1 text-xs focus:ring-1 focus:ring-primary"
+                       >
+                         <option value="planning">Planning - Project direction</option>
+                         <option value="architecture">Architecture - System design</option>
+                         <option value="implementation">Implementation - Technical approach</option>
+                         <option value="review">Review - Feedback & approval</option>
+                         <option value="escalation">Escalation - Blockers & dependencies</option>
+                       </select>
+                     </div>
+                     <div>
+                       <label className="block text-[10px] text-muted-foreground mb-1">Summary</label>
+                       <input
+                         type="text"
+                         value={decisionText}
+                         onChange={(e) => setDecisionText(e.target.value)}
+                         className="w-full bg-card border border-border rounded px-2 py-1 text-xs focus:ring-1 focus:ring-primary"
+                         placeholder="Brief summary of decision"
+                       />
+                     </div>
+                     <div>
+                       <label className="block text-[10px] text-muted-foreground mb-1">Details (optional)</label>
+                       <textarea
+                         value={decisionAuthor}
+                         onChange={(e) => setDecisionAuthor(e.target.value)}
+                         className="w-full bg-card border border-border rounded px-2 py-1 text-xs focus:ring-1 focus:ring-primary"
+                         placeholder="Author name"
+                         rows={2}
+                       />
+                     </div>
+                   </div>
+                   <div className="flex gap-2 mt-3">
+                     <Button type="button" size="sm" onClick={() => setShowDecisionForm(false)} className="text-xs">
+                       Cancel
+                     </Button>
+                     <Button type="button" size="sm" onClick={() => handleCreateDecision()} className="bg-primary/20 text-primary border border-primary/30 hover:bg-primary/30 text-xs">
+                       Add Decision
+                     </Button>
+                   </div>
+                 </div>
+               ) : (
+                 <div className="flex items-center justify-between mb-3">
+                   <h4 className="text-xs font-medium text-foreground">Decision Thread</h4>
+                   <Button type="button" size="sm" onClick={() => setShowDecisionForm(true)} className="text-xs bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20">
+                     + Add Decision
+                   </Button>
+                 </div>
+               )}
+               
+               {task.decisions && Array.isArray(task.decisions) && task.decisions.length > 0 ? (
+                 <DecisionThread decisions={task.decisions} />
+               ) : !showDecisionForm ? (
+                 <div className="text-center py-8">
+                   <p className="text-sm text-muted-foreground mb-2">No decisions yet</p>
+                   <Button type="button" size="sm" onClick={() => setShowDecisionForm(true)} className="text-xs">
+                     Create first decision
+                   </Button>
+                 </div>
+               ) : null}
+              </div>
+            )}
 
-          {activeTab === 'logs' && (
+           {activeTab === 'memory' && (
+             <div id="tabpanel-memory" role="tabpanel" aria-label="Memory" className="mt-4">
+               <div className="flex items-center justify-between mb-3">
+                 <h4 className="text-lg font-semibold text-foreground">Linked Memory Files</h4>
+                 <Button variant="link" size="xs" onClick={fetchMemoryLinks} className="text-blue-400 hover:text-blue-300">
+                   Refresh
+                 </Button>
+               </div>
+
+               {memoryLinksError && (
+                 <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-2 rounded-md text-sm mb-3">
+                   {memoryLinksError}
+                 </div>
+               )}
+
+               {loadingMemoryLinks ? (
+                 <div className="text-muted-foreground text-sm">Loading memory links...</div>
+               ) : memoryLinks.length === 0 ? (
+                 <div className="text-center py-8">
+                   <p className="text-sm text-muted-foreground">No memory files linked to this task</p>
+                 </div>
+               ) : (
+                 <div className="space-y-3">
+                   {memoryLinks.map((link) => {
+                     const contextBadgeColors: Record<string, string> = {
+                       created_from: 'bg-green-500/15 text-green-400 border-green-500/25',
+                       referenced_in: 'bg-blue-500/15 text-blue-400 border-blue-500/25',
+                       context_file: 'bg-purple-500/15 text-purple-400 border-purple-500/25',
+                       result_file: 'bg-amber-500/15 text-amber-400 border-amber-500/25',
+                       learned_from: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/25',
+                     }
+                     
+                     return (
+                       <div
+                         key={link.id}
+                         className="p-3 rounded-lg bg-secondary/30 border border-border/30 hover:border-border/60 transition-colors"
+                       >
+                         <div className="flex items-start justify-between gap-3">
+                           <div className="flex-1 min-w-0">
+                             <button
+                               onClick={async () => {
+                                 try {
+                                   const response = await fetch(`/api/memory?action=content&path=${encodeURIComponent(link.memory_path)}`)
+                                   const data = await response.json()
+                                   if (data.content !== undefined) {
+                                     setSelectedMemoryFile(link.memory_path)
+                                     setMemoryContent(data.content)
+                                     onClose()
+                                   }
+                                 } catch (error) {
+                                   console.error('Failed to load memory file:', error)
+                                 }
+                               }}
+                               className="text-sm font-mono text-purple-600 hover:text-purple-500 hover:underline truncate block"
+                               title={link.memory_path}
+                             >
+                               {link.memory_path}
+                             </button>
+                             <div className="mt-2 flex flex-wrap items-center gap-2">
+                               <span className={`text-[10px] px-2 py-0.5 rounded border font-medium ${contextBadgeColors[link.link_context] || 'bg-gray-500/15 text-gray-400 border-gray-500/25'}`}>
+                                 {link.link_context.replace(/_/g, ' ')}
+                               </span>
+                               <span className="text-[11px] text-muted-foreground">
+                                 by {link.created_by}
+                               </span>
+                               <span className="text-[11px] text-muted-foreground/60">
+                                 {new Date(link.created_at * 1000).toLocaleDateString()}
+                               </span>
+                             </div>
+                           </div>
+                         </div>
+                       </div>
+                     )
+                   })}
+                 </div>
+               )}
+             </div>
+           )}
+
+           {activeTab === 'logs' && (
             <div id="tabpanel-logs" role="tabpanel" aria-label="Logs" className="mt-4">
               <TaskExecutionLogs taskId={task.id} />
             </div>
@@ -2345,6 +2681,9 @@ function CreateTaskModal({
     assigned_to: '',
     tags: '',
     target_session: '',
+    task_type: 'normal' as 'normal' | 'mission' | 'subtask' | 'system',
+    execution_mode: 'manual' as 'manual' | 'autonomous',
+    agent_role: '' as '' | 'planner' | 'architect' | 'backend' | 'frontend' | 'qa' | 'devops' | 'reviewer' | 'recovery',
   })
   const t = useTranslations('taskBoard')
   const agentSessions = useAgentSessions(formData.assigned_to || undefined)
@@ -2403,6 +2742,9 @@ function CreateTaskModal({
           tags: formData.tags ? formData.tags.split(',').map(t => t.trim()) : [],
           assigned_to: formData.assigned_to || undefined,
           metadata,
+          task_type: formData.task_type || 'normal',
+          execution_mode: formData.execution_mode || 'manual',
+          agent_role: formData.agent_role || undefined,
         })
       })
 
@@ -2423,9 +2765,11 @@ function CreateTaskModal({
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="create-task-title" className="bg-card border border-border rounded-lg max-w-md w-full">
-        <form onSubmit={handleSubmit} className="p-6">
-          <h3 id="create-task-title" className="text-xl font-bold text-foreground mb-4">{t('createNewTask')}</h3>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="create-task-title" className="bg-card border border-border rounded-lg max-w-md w-full max-h-[90vh] flex flex-col">
+        <div className="p-4 border-b border-border flex-shrink-0">
+          <h3 id="create-task-title" className="text-lg font-bold text-foreground">{t('createNewTask')}</h3>
+        </div>
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 space-y-3">
           
           <div className="space-y-4">
             <div>
@@ -2535,48 +2879,105 @@ function CreateTaskModal({
               />
             </div>
 
-            {/* Recurring Schedule */}
-            <div className="border border-border rounded-md p-3 space-y-2">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={isRecurring}
-                  onChange={(e) => {
-                    setIsRecurring(e.target.checked)
-                    if (!e.target.checked) {
-                      setParsedSchedule(null)
-                      setScheduleInput('')
-                      setScheduleError('')
-                    }
-                  }}
-                  className="rounded border-border"
-                />
-                <span className="text-sm text-foreground">{t('makeRecurring')}</span>
-              </label>
-              {isRecurring && (
-                <div>
-                  <input
-                    type="text"
-                    value={scheduleInput}
-                    onChange={(e) => handleScheduleChange(e.target.value)}
-                    className="w-full bg-surface-1 text-foreground border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
-                    placeholder='e.g. "every morning at 9am" or "every 2 hours"'
-                  />
-                  {parsedSchedule && (
-                    <p className="text-xs text-cyan-400 mt-1">
-                      {parsedSchedule.humanReadable} <span className="text-muted-foreground font-mono">({parsedSchedule.cronExpr})</span>
-                    </p>
-                  )}
-                  {scheduleError && (
-                    <p className="text-xs text-red-400 mt-1">{scheduleError}. Try: &quot;daily at 9am&quot;, &quot;every 2 hours&quot;, &quot;weekly on monday&quot;</p>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
+            {/* Autonomous Software Factory Fields */}
+            <div className="border border-border rounded-md p-3 space-y-3">
+              <h4 className="text-sm font-medium text-foreground mb-2">🤖 Autonomous Task Settings</h4>
+              
+              <div>
+                <label htmlFor="create-task-type" className="block text-sm text-muted-foreground mb-1">Task Type</label>
+                <select
+                  id="create-task-type"
+                  value={formData.task_type}
+                  onChange={(e) => setFormData(prev => ({ ...prev, task_type: e.target.value as any }))}
+                  className="w-full bg-surface-1 text-foreground border border-border rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary/50"
+                >
+                  <option value="normal">📋 Normal Task</option>
+                  <option value="mission">🎯 Mission (Root Task)</option>
+                </select>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Mission tasks auto-generate subtasks when execution_mode='autonomous'
+                </p>
+              </div>
 
-          <div className="flex gap-3 mt-6">
-            <Button type="submit" className="flex-1" disabled={isRecurring && !parsedSchedule}>
+              <div>
+                <label htmlFor="create-execution-mode" className="block text-sm text-muted-foreground mb-1">Execution Mode</label>
+                <select
+                  id="create-execution-mode"
+                  value={formData.execution_mode}
+                  onChange={(e) => setFormData(prev => ({ ...prev, execution_mode: e.target.value as any }))}
+                  className="w-full bg-surface-1 text-foreground border border-border rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary/50"
+                >
+                  <option value="manual">👤 Manual (assign to agent)</option>
+                  <option value="autonomous">🤖 Autonomous (AI-driven)</option>
+                </select>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Autonomous tasks use AI to generate and execute subtasks
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="create-agent-role" className="block text-sm text-muted-foreground mb-1">Agent Role (Optional)</label>
+                <select
+                  id="create-agent-role"
+                  value={formData.agent_role}
+                  onChange={(e) => setFormData(prev => ({ ...prev, agent_role: e.target.value as any }))}
+                  className="w-full bg-surface-1 text-foreground border border-border rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary/50"
+                >
+                  <option value="">Auto-assign based on task content</option>
+                  <option value="planner">📋 Planner - Requirements & planning</option>
+                  <option value="architect">🏗️ Architect - Design & schema</option>
+                  <option value="backend">⚙️ Backend - API & database</option>
+                  <option value="frontend">🎨 Frontend - UI & components</option>
+                  <option value="qa">🧪 QA - Testing & quality</option>
+                  <option value="devops">🚀 DevOps - Deployment & CI/CD</option>
+                  <option value="reviewer">👀 Reviewer - Code review & audit</option>
+                </select>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Pre-assign a specific agent role to this task
+                </p>
+              </div>
+            </div>
+
+             {/* Recurring Schedule */}
+             <div className="border border-border rounded-md p-2 space-y-2">
+               <label className="flex items-center gap-2 cursor-pointer text-sm">
+                 <input
+                   type="checkbox"
+                   checked={isRecurring}
+                   onChange={(e) => {
+                     setIsRecurring(e.target.checked)
+                     if (!e.target.checked) {
+                       setParsedSchedule(null)
+                       setScheduleInput('')
+                       setScheduleError('')
+                     }
+                   }}
+                   className="rounded border-border"
+                 />
+                 <span className="text-foreground">Make Recurring</span>
+               </label>
+               {isRecurring && (
+                 <input
+                   type="text"
+                   value={scheduleInput}
+                   onChange={(e) => handleScheduleChange(e.target.value)}
+                   className="w-full bg-surface-1 text-foreground border border-border rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary/50"
+                   placeholder='e.g. "daily at 9am"'
+                 />
+               )}
+               {parsedSchedule && (
+                 <p className="text-xs text-cyan-400">
+                   {parsedSchedule.humanReadable} <span className="text-muted-foreground font-mono">({parsedSchedule.cronExpr})</span>
+                 </p>
+               )}
+               {scheduleError && (
+                 <p className="text-xs text-red-400">{scheduleError}</p>
+               )}
+             </div>
+           </div>
+
+           <div className="flex gap-2 pt-3 border-t border-border flex-shrink-0">
+             <Button type="submit" className="flex-1" size="sm" disabled={isRecurring && !parsedSchedule}>
               {isRecurring ? t('createRecurringTask') : t('createTask')}
             </Button>
             <Button type="button" variant="secondary" onClick={onClose} className="flex-1">

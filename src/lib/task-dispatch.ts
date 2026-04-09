@@ -1,4 +1,4 @@
-import { getDatabase, db_helpers } from './db'
+import { getDatabase, db_helpers, Task } from './db'
 import { runOpenClaw } from './command'
 import { callOpenClawGateway } from './openclaw-gateway'
 import { eventBus } from './event-bus'
@@ -6,6 +6,8 @@ import { logger } from './logger'
 import { config } from './config'
 import { syncTaskOutbound } from './github-sync-engine'
 import { matchAgentToRole } from './agent-role-matcher'
+import { recoveryManager, classifyError } from './recovery-manager'
+import { getActiveGates, shouldApprove } from './approval-gates'
 
 /** Sync task to GitHub/GNAP and broadcast escalation if task failed */
 function syncAndEscalateIfFailed(task: { id: number; title: string; status: string; priority: string; project_id?: number | null; workspace_id: number; description?: string | null }, newStatus: string, errorMsg?: string, dispatchAttempts?: number): void {
@@ -48,6 +50,64 @@ interface DispatchableTask {
   project_id: number | null
   agent_role?: 'planner' | 'architect' | 'backend' | 'frontend' | 'qa' | 'devops' | 'reviewer' | 'recovery'
   tags?: string[]
+}
+
+async function checkApprovalGates(db: any, taskId: number, agentId: string, workspaceId: number): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    const gates = await getActiveGates(taskId);
+
+    if (gates.length === 0) {
+      return { ok: true };
+    }
+
+    for (const gate of gates) {
+      const gateMode = gate.mode;
+      const context = {
+        task_id: taskId,
+        agent_id: agentId,
+        workspace_id: workspaceId,
+        task_status: 'in_progress'
+      };
+
+      if (shouldApprove(gate, context)) {
+        const request = db.prepare(`
+          SELECT id, status FROM approval_requests
+          WHERE task_id = ? AND gate_id = ? AND status = 'pending'
+        `).get(taskId, gate.id);
+
+        if (request) {
+          return {
+            ok: false,
+            reason: `Approval pending for gate: ${gate.name}`
+          };
+        } else {
+          const now = Math.floor(Date.now() / 1000);
+          const expiresAt = now + (gate.timeout || 3600);
+
+          db.prepare(`
+            INSERT INTO approval_requests (gate_id, task_id, agent_id, payload, reason, created_at, expires_at, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            gate.id,
+            taskId,
+            agentId,
+            JSON.stringify({ task_id: taskId, agent_id: agentId }),
+            `Approval required before task start: ${gate.name}`,
+            now,
+            expiresAt,
+            'pending'
+          );
+
+          return { ok: false, reason: `Approval request created for gate: ${gate.name}` };
+        }
+      }
+    }
+
+    return { ok: true };
+  } catch (error) {
+    logger.warn({ taskId, error }, 'Approval gate check failed - continuing with dispatch');
+    return { ok: true };
+  }
 }
 
 export async function dispatchParallelGroups(): Promise<{ ok: boolean; dispatched: number; message: string }> {
@@ -182,14 +242,38 @@ async function dispatchSingleTask(task: DispatchableTask): Promise<{ ok: boolean
   } catch (error: any) {
     const errorMsg = error.message || 'Unknown error'
     
+    let recoveryStrategy = 'retry';
+    try {
+      const recoveryResult = await recoveryManager.executeRecovery({
+        taskId: task.id,
+        agentId: task.assigned_to || '',
+        error,
+        failureType: classifyError(error),
+        attempt: 1,
+        maxRetries: 3,
+        checkpoint: null,
+        recoveryLogs: []
+      });
+      recoveryStrategy = recoveryResult.strategy;
+      
+      logger.info({
+        taskId: task.id,
+        strategy: recoveryResult.strategy,
+        error: errorMsg
+      }, 'Recovery strategy executed');
+    } catch (recoveryError: any) {
+      logger.error({ taskId: task.id, recoveryError }, 'Recovery system failed, falling back to default handling');
+    }
+    
     db.prepare(`
       UPDATE tasks 
       SET status = 'assigned',
           error_message = ?,
           retry_count = COALESCE(retry_count, 0) + 1,
+          recovery_strategy = ?,
           updated_at = ?
       WHERE id = ?
-    `).run(errorMsg.substring(0, 5000), Math.floor(Date.now() / 1000), task.id)
+    `).run(errorMsg.substring(0, 5000), recoveryStrategy, Math.floor(Date.now() / 1000), task.id)
 
     eventBus.broadcast('task.status_changed', {
       id: task.id,
@@ -882,7 +966,12 @@ export async function dispatchAssignedTasks(): Promise<{ ok: boolean; message: s
   const now = Math.floor(Date.now() / 1000)
 
   for (const task of tasks) {
-    // Mark as in_progress immediately to prevent re-dispatch
+    const approvalCheck = await checkApprovalGates(db, task.id, task.assigned_to, task.workspace_id);
+    if (!approvalCheck.ok) {
+      logger.info({ taskId: task.id, reason: approvalCheck.reason }, 'Approval check failed');
+      continue;
+    }
+
     db.prepare('UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?')
       .run('in_progress', now, task.id)
 
@@ -1051,15 +1140,36 @@ export async function dispatchAssignedTasks(): Promise<{ ok: boolean; message: s
       const errorMsg = err.message || 'Unknown error'
       logger.error({ taskId: task.id, agent: task.agent_name, err }, 'Task dispatch failed')
 
-      // Increment dispatch_attempts and decide next status
+      let recoveryStrategy = 'retry';
+      try {
+        const recoveryResult = await recoveryManager.executeRecovery({
+          taskId: task.id,
+          agentId: task.assigned_to || '',
+           error: err,
+           failureType: classifyError(err),
+          attempt: 1,
+          maxRetries: 3,
+          checkpoint: null,
+          recoveryLogs: []
+        });
+        recoveryStrategy = recoveryResult.strategy;
+        
+        logger.info({
+          taskId: task.id,
+          strategy: recoveryResult.strategy,
+          error: errorMsg
+        }, 'Recovery strategy executed');
+      } catch (recoveryError: any) {
+        logger.error({ taskId: task.id, recoveryError }, 'Recovery system failed, falling back to default handling');
+      }
+
       const currentAttempts = (db.prepare('SELECT dispatch_attempts FROM tasks WHERE id = ?').get(task.id) as { dispatch_attempts: number } | undefined)?.dispatch_attempts ?? 0
       const newAttempts = currentAttempts + 1
       const maxDispatchRetries = 5
 
       if (newAttempts >= maxDispatchRetries) {
-        // Too many failures — move to failed
-        db.prepare('UPDATE tasks SET status = ?, error_message = ?, dispatch_attempts = ?, updated_at = ? WHERE id = ?')
-          .run('failed', `Dispatch failed ${newAttempts} times. Last: ${errorMsg.substring(0, 5000)}`, newAttempts, Math.floor(Date.now() / 1000), task.id)
+        db.prepare('UPDATE tasks SET status = ?, error_message = ?, dispatch_attempts = ?, recovery_strategy = ?, updated_at = ? WHERE id = ?')
+          .run('failed', `Dispatch failed ${newAttempts} times. Last: ${errorMsg.substring(0, 5000)}`, newAttempts, recoveryStrategy, Math.floor(Date.now() / 1000), task.id)
 
         eventBus.broadcast('task.status_changed', {
           id: task.id,
@@ -1070,9 +1180,8 @@ export async function dispatchAssignedTasks(): Promise<{ ok: boolean; message: s
         })
         syncAndEscalateIfFailed(task, 'failed', `Dispatch failed ${newAttempts} times`, newAttempts)
       } else {
-        // Revert to assigned so it can be retried on the next tick
-        db.prepare('UPDATE tasks SET status = ?, error_message = ?, dispatch_attempts = ?, updated_at = ? WHERE id = ?')
-          .run('assigned', errorMsg.substring(0, 5000), newAttempts, Math.floor(Date.now() / 1000), task.id)
+        db.prepare('UPDATE tasks SET status = ?, error_message = ?, dispatch_attempts = ?, recovery_strategy = ?, updated_at = ? WHERE id = ?')
+          .run('assigned', errorMsg.substring(0, 5000), newAttempts, recoveryStrategy, Math.floor(Date.now() / 1000), task.id)
 
         eventBus.broadcast('task.status_changed', {
           id: task.id,
@@ -1260,4 +1369,125 @@ export async function autoRouteInboxTasks(): Promise<{ ok: boolean; message: str
       ? `Auto-routed ${routed}/${inboxTasks.length} inbox task(s)`
       : `${inboxTasks.length} inbox task(s), no suitable agents found`,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Self-Healing Recovery System (Phase 9)
+// ---------------------------------------------------------------------------
+
+export async function requeueWithRecovery(
+  taskId: number, 
+  error: Error,
+  workspaceId: number
+): Promise<{ ok: boolean; action: 'retry' | 'escalate' }> {
+  const db = getDatabase()
+  
+  const task = db.prepare('SELECT * FROM tasks WHERE id = ? AND workspace_id = ?')
+    .get(taskId, workspaceId) as Task | undefined
+  
+  if (!task) {
+    throw new Error('Task not found')
+  }
+
+  const recoveryLog = {
+    timestamp: Date.now(),
+    error: error.message,
+    action: 'retry',
+    retry_count: (task.retry_count || 0) + 1
+  }
+  
+  const existingLogs = JSON.parse(task.recovery_logs || '[]')
+  existingLogs.push(recoveryLog)
+  
+  const failureType = classifyError(error)
+  const maxRetries = task.max_retries || 3
+  
+  if ((task.retry_count || 0) < maxRetries) {
+    db.prepare(`
+      UPDATE tasks 
+      SET status = 'assigned', 
+          retry_count = retry_count + 1,
+          recovery_logs = ?,
+          failure_type = ?,
+          updated_at = ?
+      WHERE id = ?
+    `).run(
+      JSON.stringify(existingLogs),
+      failureType,
+      Math.floor(Date.now() / 1000),
+      taskId
+    )
+    
+    eventBus.broadcast('task.recovering', { 
+      task_id: taskId, 
+      attempt: (task.retry_count || 0) + 1,
+      max_retries: maxRetries,
+      error: error.message
+    })
+    
+    logger.info({ taskId, attempt: (task.retry_count || 0) + 1, error: error.message }, 'Task queued for retry')
+    
+    return { ok: true, action: 'retry' }
+  } else {
+    db.prepare(`
+      UPDATE tasks 
+      SET status = 'failed',
+          recovery_logs = ?,
+          failure_type = ?,
+          error_message = ?,
+          outcome = 'failed',
+          updated_at = ?
+      WHERE id = ?
+    `).run(
+      JSON.stringify(existingLogs),
+      failureType,
+      error.message,
+      Math.floor(Date.now() / 1000),
+      taskId
+    )
+    
+    eventBus.broadcast('task.escalated', { 
+      task_id: taskId, 
+      reason: 'max_retries_exceeded',
+      error: error.message,
+      retry_count: task.retry_count || 0
+    })
+    
+    logger.error({ taskId, error: error.message }, 'Task escalated after max retries')
+    
+    return { ok: true, action: 'escalate' }
+  }
+}
+
+export async function enhancedRequeueStaleTasks(): Promise<{ ok: boolean; requeued: number }> {
+  const db = getDatabase()
+  const now = Math.floor(Date.now() / 1000)
+  const timeoutMinutes = 10
+  const threshold = now - (timeoutMinutes * 60)
+  
+  const staleTasks = db.prepare(`
+    SELECT t.*, a.status as agent_status
+    FROM tasks t
+    LEFT JOIN agents a ON a.name = t.assigned_to
+    WHERE t.status = 'in_progress'
+      AND t.updated_at < ?
+      AND (a.status = 'offline' OR a.status IS NULL)
+  `).all(threshold) as Task[]
+  
+  let requeued = 0
+  
+  for (const task of staleTasks) {
+    try {
+      await requeueWithRecovery(
+        task.id,
+        new Error(`Agent offline or unresponsive for ${timeoutMinutes} minutes`),
+        task.workspace_id || 1
+      )
+      requeued++
+    } catch (error) {
+      logger.error({ taskId: task.id, error }, 'Failed to requeue stale task')
+    }
+  }
+  
+  return { ok: true, requeued }
 }

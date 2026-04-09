@@ -29,6 +29,78 @@ const migrations: Migration[] = [
     }
   },
   {
+    id: '054_task_memory_links',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_memory_links (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id INTEGER NOT NULL,
+          memory_path TEXT NOT NULL,
+          context TEXT NOT NULL CHECK (context IN ('created_from', 'referenced_in', 'context_file', 'result_file', 'learned_from')),
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          created_by TEXT,
+          metadata TEXT,
+          UNIQUE(task_id, memory_path, context),
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_task_memory_links_task_id ON task_memory_links(task_id);
+        CREATE INDEX IF NOT EXISTS idx_task_memory_links_memory_path ON task_memory_links(memory_path);
+        CREATE INDEX IF NOT EXISTS idx_task_memory_links_context ON task_memory_links(context);
+      `);
+    }
+  },
+  {
+    id: '053_workflow_persona_schema',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS workflows (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          pattern TEXT NOT NULL,
+          nodes TEXT NOT NULL,
+          edges TEXT NOT NULL,
+          triggers TEXT DEFAULT '[]',
+          execution_count INTEGER DEFAULT 0,
+          avg_duration REAL,
+          last_execution INTEGER,
+          enabled INTEGER DEFAULT 1,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        
+        CREATE INDEX IF NOT EXISTS idx_workflows_pattern ON workflows(pattern);
+        CREATE INDEX IF NOT EXISTS idx_workflows_enabled ON workflows(enabled);
+        
+        ALTER TABLE tasks ADD COLUMN workflow_id TEXT;
+        ALTER TABLE tasks ADD COLUMN agent_personality TEXT;
+        
+        CREATE TABLE IF NOT EXISTS agent_personas (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT,
+          system_prompt TEXT NOT NULL,
+          personality TEXT,
+          capabilities TEXT,
+          examples TEXT,
+          enabled INTEGER DEFAULT 1,
+          is_default INTEGER DEFAULT 0,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        
+        INSERT OR IGNORE INTO agent_personas (id, name, description, system_prompt, personality, capabilities, examples, is_default, created_at)
+        VALUES 
+          ('planner', 'Planner', 'Breaks down complex goals into actionable tasks', 'You are a senior project planner with expertise in breaking down large initiatives into manageable tasks. You focus on structure, dependencies, and clear execution paths.', '{"creativity":0.7,"riskTolerance":0.3,"verbosity":"normal","style":"formal"}', '["planning","scheduling","roadmap-creation"]', '["Create roadmap for MVP launch","Break down mobile app development"]', 1, unixepoch()),
+          ('architect', 'Architect', 'Designs system architecture and data structures', 'You are an experienced systems architect focusing on scalable, maintainable designs. You consider tradeoffs, scalability, and long-term maintainability.', '{"creativity":0.5,"riskTolerance":0.4,"verbosity":"detailed","style":"technical"}', '["architecture","database","api-design"]', '["Design microservices for e-commerce","Create GraphQL schema"]', 1, unixepoch()),
+          ('backend', 'Backend Developer', 'Implements backend APIs and services', 'You are a backend developer focused on robust, efficient API implementations. You follow REST/GraphQL best practices and prioritize performance and reliability.', '{"creativity":0.3,"riskTolerance":0.5,"verbosity":"concise","style":"technical"}', '["backend","api","database"]', '["Create Node.js API","Implement payment service"]', 1, unixepoch()),
+          ('frontend', 'Frontend Developer', 'Builds user interfaces and components', 'You are a frontend developer focused on creating intuitive, accessible user interfaces. You follow modern React patterns and prioritize user experience.', '{"creativity":0.8,"riskTolerance":0.6,"verbosity":"normal","style":"casual"}', '["frontend","ui","component-design"]', '["Build React e-commerce page","Create dashboard UI"]', 1, unixepoch()),
+          ('qa', 'QA Engineer', 'Writes tests and ensures quality', 'You are a QA engineer focused on comprehensive test coverage and quality assurance. You consider edge cases, error handling, and user scenarios.', '{"creativity":0.4,"riskTolerance":0.2,"verbosity":"detailed","style":"formal"}', '["testing","qa","coverage"]', '["Write unit tests for payment","Create E2E tests"]', 1, unixepoch()),
+          ('devops', 'DevOps Engineer', 'Manages deployment and infrastructure', 'You are a DevOps engineer focused on robust deployments and infrastructure. You prioritize reliability, monitoring, and efficient resource usage.', '{"creativity":0.3,"riskTolerance":0.7,"verbosity":"normal","style":"technical"}', '["deployment","infrastructure","monitoring"]', '["Setup CI/CD pipeline","Configure AWS infrastructure"]', 1, unixepoch()),
+          ('reviewer', 'Code Reviewer', 'Reviews code and provides feedback', 'You are a code reviewer focused on quality, maintainability, and best practices. You provide constructive feedback and identify potential issues.', '{"creativity":0.2,"riskTolerance":0.3,"verbosity":"detailed","style":"formal"}', '["review","security","best-practices"]', '["Review pull request for security","Feedback on API design"]', 1, unixepoch()),
+          ('recovery', 'Recovery Agent', 'Handles failures and retries', 'You are a recovery agent specialized in handling failures, implementing retries, and managing error scenarios. You focus on resilience and self-healing.', '{"creativity":0.1,"riskTolerance":0.4,"verbosity":"concise","style":"technical"}', '["recovery","error-handling","resilience"]', '["Handle database connection failure","Implement exponential backoff"]', 1, unixepoch())
+      `);
+    }
+  },
+  {
     id: '002_quality_reviews',
     up: (db) => {
       db.exec(`
@@ -1491,10 +1563,82 @@ const migrations: Migration[] = [
       db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_parallel_group ON tasks(parallel_group_id)`)
       db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_agent_role ON tasks(agent_role)`)
     }
-  }
-]
+  },
+  {
+    id: '051_mcp_checkpoint_schema',
+    up(db: Database.Database) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS mcp_servers (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          transport TEXT NOT NULL,
+          command TEXT,
+          url TEXT,
+          config TEXT,
+          enabled INTEGER DEFAULT 1,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        
+        CREATE INDEX IF NOT EXISTS idx_mcp_servers_enabled ON mcp_servers(enabled);
+      `);
+      
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS checkpoints (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id INTEGER NOT NULL,
+          stage TEXT NOT NULL,
+          progress INTEGER NOT NULL,
+          timestamp INTEGER NOT NULL,
+          data TEXT,
+          message TEXT,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        );
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_checkpoints_task_id ON checkpoints(task_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_checkpoints_timestamp ON checkpoints(timestamp)`);
+      
+      const cols = db.prepare('PRAGMA table_info(tasks)').all() as any[];
+      if (!cols.some(c => c.name === 'checkpoint_backend')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN checkpoint_backend TEXT DEFAULT 'sqlite'`);
+      }
+      
+        const agentCols = db.prepare('PRAGMA table_info(agents)').all() as any[];
+        if (!agentCols.some(c => c.name === 'mcp_servers')) {
+          db.exec(`ALTER TABLE agents ADD COLUMN mcp_servers TEXT DEFAULT '[]'`);
+        }
+      }
+    },
+    {
+      id: '052_task_memory_links',
+      up(db: Database.Database) {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS task_memory_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            memory_path TEXT NOT NULL,
+            link_context TEXT NOT NULL,
+            created_by TEXT NOT NULL DEFAULT 'system',
+            workspace_id INTEGER NOT NULL DEFAULT 1,
+            created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            metadata TEXT DEFAULT '{}',
+            FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+            UNIQUE(task_id, memory_path, link_context)
+          )
+        `)
 
-export function runMigrations(db: Database.Database) {
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_task_memory_links_task_id ON task_memory_links(task_id)`)
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_task_memory_links_memory_path ON task_memory_links(memory_path)`)
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_task_memory_links_context ON task_memory_links(link_context)`)
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_task_memory_links_task_context ON task_memory_links(task_id, link_context)`)
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_task_memory_links_created_at ON task_memory_links(created_at)`)
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_task_memory_links_created_by ON task_memory_links(created_by)`)
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_task_memory_links_workspace_id ON task_memory_links(workspace_id)`)
+      }
+    }
+  ]
+  
+  export function runMigrations(db: Database.Database) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       id TEXT PRIMARY KEY,

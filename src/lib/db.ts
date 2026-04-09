@@ -225,6 +225,8 @@ export interface Task {
   artifacts?: string;
   decisions?: string;
   recovery_logs?: string;
+  workflow_id?: string;
+  agent_personality?: string;
 }
 
 export interface Agent {

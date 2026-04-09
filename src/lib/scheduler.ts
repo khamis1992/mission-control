@@ -4,6 +4,8 @@ import { config, ensureDirExists } from './config'
 import { join, dirname } from 'path'
 import { readdirSync, statSync, unlinkSync } from 'fs'
 import { logger } from './logger'
+import { traceCollector } from './telemetry'
+import { testMCPServerConnection } from './mcp-registry'
 import { processWebhookRetries } from './webhooks'
 import { syncClaudeSessions } from './claude-sessions'
 import { pruneGatewaySessionsOlderThan, getAgentLiveStatuses } from './sessions'
@@ -11,6 +13,7 @@ import { eventBus } from './event-bus'
 import { syncSkillsFromDisk } from './skill-sync'
 import { syncLocalAgents } from './local-agent-sync'
 import { dispatchAssignedTasks, runAegisReviews, requeueStaleTasks, autoRouteInboxTasks, dispatchParallelGroups } from './task-dispatch'
+import { RecoveryManager, recoveryManager } from './recovery-manager'
 import { spawnRecurringTasks } from './recurring-tasks'
 
 const BACKUP_DIR = join(dirname(config.dbPath), 'backups')
@@ -398,6 +401,15 @@ export function initScheduler() {
     running: false,
   })
 
+  tasks.set('recovery_orchestration', {
+    name: 'Recovery Orchestration',
+    intervalMs: TICK_MS,
+    lastRun: null,
+    nextRun: now + 30_000,
+    enabled: true,
+    running: false,
+  })
+
   tasks.set('parallel_dispatch', {
     name: 'Parallel Dispatch',
     intervalMs: TICK_MS,
@@ -407,9 +419,38 @@ export function initScheduler() {
     running: false,
   })
 
+  tasks.set('mcp_health_check', {
+    name: 'MCP Server Health Check',
+    intervalMs: 5 * 60 * 1000,
+    lastRun: null,
+    nextRun: now + 5 * 60 * 1000,
+    enabled: true,
+    running: false,
+  })
+
+  // Cost aggregation runs daily (at ~5 AM)
+  const msUntilNextCostAgg = getNextDailyMs(5)
+  tasks.set('cost_aggregation', {
+    name: 'Daily Cost Aggregation',
+    intervalMs: DAILY_MS,
+    lastRun: null,
+    nextRun: now + msUntilNextCostAgg,
+    enabled: true,
+    running: false,
+  })
+
+  tasks.set('cost_aggregation', {
+    name: 'Daily Cost Aggregation',
+    intervalMs: DAILY_MS,
+    lastRun: null,
+    nextRun: now + getNextDailyMs(5),
+    enabled: true,
+    running: false,
+  })
+
   // Start the tick loop
   tickInterval = setInterval(tick, TICK_MS)
-  logger.info('Scheduler initialized - backup at ~3AM, cleanup at ~4AM, heartbeat every 5m, webhook/claude/skill/local-agent/gateway-agent sync every 60s')
+  logger.info('Scheduler initialized - backup at ~3AM, cleanup at ~4AM, heartbeat every 5m, MCP health check every 5m, webhook/claude/skill/local-agent/gateway-agent sync every 60s')
 }
 
 /** Calculate ms until next occurrence of a given hour (UTC) */
@@ -423,6 +464,71 @@ function getNextDailyMs(hour: number): number {
   return next.getTime() - now.getTime()
 }
 
+/** Process failed tasks through recovery orchestration */
+async function processRecoveryTasks(): Promise<{ ok: boolean; message: string }> {
+  const db = getDatabase();
+  const maxRetries = 5;
+  
+  // Find failed tasks that haven't been escalated
+  const failedTasks = db.prepare(`
+    SELECT t.*, a.name as agent_name, a.status as agent_status
+    FROM tasks t
+    LEFT JOIN agents a ON a.name = t.assigned_to
+    WHERE t.status = 'failed'
+      AND t.recovery_strategy IS NULL
+      AND t.retry_count < ?
+    ORDER BY t.updated_at ASC
+    LIMIT 10
+  `).all(maxRetries) as Array<{
+    id: number;
+    title: string;
+    assigned_to: string | null;
+    retry_count: number;
+    error_message: string | null;
+    agent_name: string | null;
+    agent_status: string | null;
+  }>;
+  
+  let processed = 0;
+  let escaped = 0;
+  
+  for (const task of failedTasks) {
+    try {
+      const error = new Error(task.error_message || 'Unknown error');
+      const failureType = RecoveryManager.classifyError(error);
+      
+      const recoveryResult = await recoveryManager.executeRecovery({
+        taskId: task.id,
+        agentId: task.agent_name || '',
+        error,
+        failureType,
+        attempt: (task.retry_count || 0) + 1,
+        maxRetries: maxRetries,
+        checkpoint: null, // Use checkpoint when available
+        recoveryLogs: []
+      });
+      
+      processed++;
+      
+      logger.info({
+        taskId: task.id,
+        strategy: recoveryResult.strategy,
+        error: task.error_message
+      }, 'Recovery orchestration processed');
+    } catch (err) {
+      logger.warn({ taskId: task.id, error: err }, 'Recovery orchestration failed');
+      escaped++;
+    }
+  }
+  
+  return {
+    ok: true,
+    message: processed > 0 
+      ? `Processed ${processed} failed task(s), ${escaped} failed`
+      : 'No tasks to process'
+  };
+}
+
 /** Check and run due tasks */
 async function tick() {
   const now = Date.now()
@@ -431,6 +537,7 @@ async function tick() {
     if (task.running || now < task.nextRun) continue
 
     // Check if this task is enabled in settings (heartbeat is always enabled)
+     // Check if this task is enabled in settings (heartbeat is always enabled)
     const settingKey = id === 'auto_backup' ? 'general.auto_backup'
       : id === 'auto_cleanup' ? 'general.auto_cleanup'
       : id === 'webhook_retry' ? 'webhooks.retry_enabled'
@@ -442,9 +549,11 @@ async function tick() {
       : id === 'aegis_review' ? 'general.aegis_review'
       : id === 'recurring_task_spawn' ? 'general.recurring_task_spawn'
       : id === 'stale_task_requeue' ? 'general.stale_task_requeue'
+      : id === 'recovery_orchestration' ? 'general.recovery_orchestration'
       : id === 'parallel_dispatch' ? 'general.parallel_dispatch'
+      : id === 'mcp_health_check' ? 'general.mcp_health_check'
       : 'general.agent_heartbeat'
-    const defaultEnabled = id === 'agent_heartbeat' || id === 'webhook_retry' || id === 'claude_session_scan' || id === 'skill_sync' || id === 'local_agent_sync' || id === 'gateway_agent_sync' || id === 'task_dispatch' || id === 'aegis_review' || id === 'recurring_task_spawn' || id === 'stale_task_requeue' || id === 'parallel_dispatch'
+    const defaultEnabled = id === 'agent_heartbeat' || id === 'webhook_retry' || id === 'claude_session_scan' || id === 'skill_sync' || id === 'local_agent_sync' || id === 'gateway_agent_sync' || id === 'task_dispatch' || id === 'aegis_review' || id === 'recurring_task_spawn' || id === 'stale_task_requeue' || id === 'recovery_orchestration' || id === 'parallel_dispatch' || id === 'mcp_health_check' || id === 'cost_aggregation'
     if (!isSettingEnabled(settingKey, defaultEnabled)) continue
 
     task.running = true
@@ -467,7 +576,9 @@ async function tick() {
         : id === 'aegis_review' ? await runAegisReviews()
         : id === 'recurring_task_spawn' ? await spawnRecurringTasks()
         : id === 'stale_task_requeue' ? await requeueStaleTasks()
+        : id === 'recovery_orchestration' ? await processRecoveryTasks()
         : id === 'parallel_dispatch' ? await dispatchParallelGroups()
+        : id === 'mcp_health_check' ? await runMCPHealthCheck()
         : await runCleanup()
       task.lastResult = { ...result, timestamp: now }
     } catch (err: any) {
@@ -477,6 +588,52 @@ async function tick() {
       task.lastRun = now
       task.nextRun = now + task.intervalMs
     }
+  }
+}
+
+async function runMCPHealthCheck(): Promise<{ ok: boolean; message: string; checked?: number; healthy?: number; unhealthy?: number }> {
+  try {
+    const db = getDatabase()
+    const servers = db.prepare('SELECT * FROM mcp_servers WHERE enabled = 1').all() as any[]
+    let healthy = 0
+    let unhealthy = 0
+
+    for (const server of servers) {
+      try {
+        const isEnabled = server.enabled === 1 || server.enabled === '1'
+        if (!isEnabled) continue
+
+        const connOK = await testMCPServerConnection({
+          id: server.id,
+          name: server.name,
+          transport: server.transport,
+          command: server.command,
+          url: server.url,
+          config: server.config ? JSON.parse(server.config) : undefined,
+          enabled: true,
+          created_at: server.created_at
+        })
+        if (connOK) {
+          healthy++
+        } else {
+          unhealthy++
+          logger.error({ server_id: server.id }, 'MCP server health check failed')
+        }
+      } catch (err) {
+        unhealthy++
+        logger.error({ server_id: server.id, err }, 'MCP server health check failed')
+      }
+    }
+
+    return {
+      ok: true,
+      message: `MCP health check: ${healthy} healthy, ${unhealthy} unhealthy`,
+      checked: servers.length,
+      healthy,
+      unhealthy
+    }
+  } catch (err: any) {
+    return { ok: false, message: `MCP health check failed: ${err.message}` }
   }
 }
 
@@ -504,9 +661,10 @@ export function getSchedulerStatus() {
       : id === 'aegis_review' ? 'general.aegis_review'
       : id === 'recurring_task_spawn' ? 'general.recurring_task_spawn'
       : id === 'stale_task_requeue' ? 'general.stale_task_requeue'
+      : id === 'recovery_orchestration' ? 'general.recovery_orchestration'
       : id === 'parallel_dispatch' ? 'general.parallel_dispatch'
       : 'general.agent_heartbeat'
-    const defaultEnabled = id === 'agent_heartbeat' || id === 'webhook_retry' || id === 'claude_session_scan' || id === 'skill_sync' || id === 'local_agent_sync' || id === 'gateway_agent_sync' || id === 'task_dispatch' || id === 'aegis_review' || id === 'recurring_task_spawn' || id === 'stale_task_requeue' || id === 'parallel_dispatch'
+    const defaultEnabled = id === 'agent_heartbeat' || id === 'webhook_retry' || id === 'claude_session_scan' || id === 'skill_sync' || id === 'local_agent_sync' || id === 'gateway_agent_sync' || id === 'task_dispatch' || id === 'aegis_review' || id === 'recurring_task_spawn' || id === 'stale_task_requeue' || id === 'recovery_orchestration' || id === 'parallel_dispatch'
     result.push({
       id,
       name: task.name,
@@ -519,6 +677,37 @@ export function getSchedulerStatus() {
   }
 
   return result
+}
+
+async function runCostAggregation(): Promise<{ ok: boolean; message: string; agents?: number; total_cost?: number }> {
+  try {
+    const traces = await traceCollector.getAllTraces()
+
+    let totalCost = 0
+    const agentCosts: Record<string, number> = {}
+
+    traces.forEach(trace => {
+      totalCost += trace.cost_usd
+      if (!agentCosts[trace.agent_id]) {
+        agentCosts[trace.agent_id] = 0
+      }
+      agentCosts[trace.agent_id] += trace.cost_usd
+    })
+
+    logger.info({
+      date: new Date().toISOString().split('T')[0],
+      total_cost: totalCost,
+      agents: Object.keys(agentCosts).length,
+      agent_breakdown: agentCosts,
+    }, 'Daily Cost Summary')
+
+    return {
+      ok: true,
+      message: `Cost aggregation completed | Total: $${totalCost.toFixed(6)} | Agents: ${Object.keys(agentCosts).length}`,
+    }
+  } catch (err: any) {
+    return { ok: false, message: `Cost aggregation failed: ${err.message}` }
+  }
 }
 
 /** Manually trigger a scheduled task */
@@ -535,7 +724,10 @@ export async function triggerTask(taskId: string): Promise<{ ok: boolean; messag
   if (taskId === 'aegis_review') return runAegisReviews()
   if (taskId === 'recurring_task_spawn') return spawnRecurringTasks()
   if (taskId === 'stale_task_requeue') return requeueStaleTasks()
+  if (taskId === 'recovery_orchestration') return processRecoveryTasks()
   if (taskId === 'parallel_dispatch') return dispatchParallelGroups()
+  if (taskId === 'mcp_health_check') return runMCPHealthCheck()
+  if (taskId === 'cost_aggregation') return runCostAggregation()
   return { ok: false, message: `Unknown task: ${taskId}` }
 }
 

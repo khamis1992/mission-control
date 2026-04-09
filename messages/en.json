@@ -1588,6 +1588,14 @@
     "backlinks": "Backlinks ({count})",
     "wikiLinks": "Wiki-links ({count})"
   },
+  "unifiedSearch": {
+    "placeholder": "Search tasks and memory...",
+    "search": "Search",
+    "noSearchYet": "Start searching",
+    "loadMore": "Load {count} more",
+    "fileCount": "{count} files",
+    "view": "View"
+  },
   "userManagement": {
     "adminAccessRequired": "Admin access required",
     "failedToLoadUsers": "Failed to load users",

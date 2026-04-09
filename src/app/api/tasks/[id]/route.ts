@@ -10,6 +10,7 @@ import { normalizeTaskUpdateStatus } from '@/lib/task-status';
 import { syncTaskOutbound } from '@/lib/github-sync-engine';
 import { removeTaskFromGnap } from '@/lib/gnap-sync';
 import { config } from '@/lib/config';
+import { traceCollector } from '@/lib/telemetry';
 
 function formatTicketRef(prefix?: string | null, num?: number | null): string | undefined {
   if (!prefix || typeof num !== 'number' || !Number.isFinite(num) || num <= 0) return undefined
@@ -394,6 +395,14 @@ export async function PUT(
     // Fire-and-forget outbound sync (GitHub + GNAP)
     if (changes.length > 0) {
       syncTaskOutbound(updatedTask as any, workspaceId);
+    }
+
+    // End telemetry trace if task is completed
+    if (normalizedStatus === 'done') {
+      const agent = updatedTask.assigned_to || 'unassigned';
+      traceCollector.endTraceByTask(taskId, agent).catch(err =>
+        logger.warn({ taskId, agent, err }, 'Telemetry trace end failed')
+      );
     }
 
     // Broadcast to SSE clients
