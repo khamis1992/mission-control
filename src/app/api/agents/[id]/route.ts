@@ -78,6 +78,15 @@ export async function PUT(
       return NextResponse.json({ error: 'Agent not found' }, { status: 404 })
     }
 
+    const validStatuses = ['offline', 'idle', 'busy', 'error'];
+    const validRoles = ['planner', 'architect', 'backend', 'frontend', 'qa', 'devops', 'reviewer', 'recovery', 'orchestrator', 'developer', 'specialist-dev', 'researcher', 'content-creator', 'security-auditor'];
+    
+    if (role && !validRoles.includes(role)) {
+      return NextResponse.json({ 
+        error: `Invalid role. Must be one of: ${validRoles.join(', ')}` 
+      }, { status: 400 });
+    }
+
     const now = Math.floor(Date.now() / 1000)
     const existingConfig = agent.config ? JSON.parse(agent.config) : {}
 

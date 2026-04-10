@@ -232,7 +232,7 @@ export interface Task {
 export interface Agent {
   id: number;
   name: string;
-  role: string;
+  role: 'planner' | 'architect' | 'backend' | 'frontend' | 'qa' | 'devops' | 'reviewer' | 'recovery' | 'orchestrator' | 'developer' | 'specialist-dev' | 'researcher' | 'content-creator' | 'security-auditor';
   session_key?: string;
   soul_content?: string;
   status: 'offline' | 'idle' | 'busy' | 'error';
@@ -240,7 +240,7 @@ export interface Agent {
   last_activity?: string;
   created_at: number;
   updated_at: number;
-  config?: string; // JSON string
+  config?: string;
 }
 
 export interface Comment {

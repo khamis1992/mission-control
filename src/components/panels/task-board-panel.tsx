@@ -11,6 +11,7 @@ import { createClientLogger } from '@/lib/client-logger'
 import { useFocusTrap } from '@/lib/use-focus-trap'
 
 import { AgentAvatar } from '@/components/ui/agent-avatar'
+import { ProjectAnalysisTab, IterationPlanningTab, TimelineTab, DependenciesTab } from '@/components/tabs'
 import { MarkdownRenderer } from '@/components/markdown-renderer'
 import { Button } from '@/components/ui/button'
 import { ProjectManagerModal } from '@/components/modals/project-manager-modal'
@@ -2891,12 +2892,12 @@ function CreateTaskModal({
                   onChange={(e) => setFormData(prev => ({ ...prev, task_type: e.target.value as any }))}
                   className="w-full bg-surface-1 text-foreground border border-border rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary/50"
                 >
-                  <option value="normal">📋 Normal Task</option>
-                  <option value="mission">🎯 Mission (Root Task)</option>
-                </select>
-                <p className="text-[11px] text-muted-foreground mt-1">
-                  Mission tasks auto-generate subtasks when execution_mode='autonomous'
-                </p>
+                   <option value="normal">📋 Normal Task</option>
+                   <option value="mission">🎯 Mission (Root Task)</option>
+                 </select>
+                 <p className="text-[11px] text-muted-foreground mt-1">
+                   Mission tasks auto-generate subtasks when execution_mode=&apos;autonomous&apos;
+                 </p>
               </div>
 
               <div>

@@ -49,5 +49,12 @@ if [ -z "$API_KEY" ] || [ "$API_KEY" = "generate-a-random-key" ]; then
   export API_KEY
 fi
 
+# --- Run pre-provisioning (skills, agents, settings) ---
+if [ -f /app/scripts/provision.sh ]; then
+  printf '[entrypoint] Running pre-provisioning...\n'
+  bash /app/scripts/provision.sh --skip-openclaw 2>/dev/null || true
+  printf '[entrypoint] Pre-provisioning complete\n'
+fi
+
 printf '[entrypoint] Starting server\n'
 exec node server.js

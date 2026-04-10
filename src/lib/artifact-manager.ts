@@ -9,7 +9,7 @@ import { eventBus } from './event-bus'
  */
 
 export interface Artifact {
-  type: 'prd' | 'architecture' | 'code' | 'test' | 'doc' | 'log' | 'schema' | 'config'
+  type: 'prd' | 'architecture' | 'code' | 'test' | 'doc' | 'log' | 'schema' | 'config' | 'file'
   title: string
   content: string
   created_at: number
@@ -17,6 +17,9 @@ export interface Artifact {
     language?: string
     file_path?: string
     size_bytes?: number
+    version?: number
+    content_hash?: string
+    agent_role?: string
     [key: string]: any
   }
 }

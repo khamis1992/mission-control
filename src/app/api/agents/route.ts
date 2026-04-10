@@ -372,8 +372,22 @@ export async function PUT(request: NextRequest) {
 
     // Handle single agent update or bulk updates
     if (body.name) {
-      // Single agent update
+      const validStatuses = ['offline', 'idle', 'busy', 'error'];
+      const validRoles = ['planner', 'architect', 'backend', 'frontend', 'qa', 'devops', 'reviewer', 'recovery', 'orchestrator', 'developer', 'specialist-dev', 'researcher', 'content-creator', 'security-auditor'];
+      
       const { name, status, last_activity, config, session_key, soul_content, role } = body;
+      
+      if (status && !validStatuses.includes(status)) {
+        return NextResponse.json({ 
+          error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` 
+        }, { status: 400 });
+      }
+      
+      if (role && !validRoles.includes(role)) {
+        return NextResponse.json({ 
+          error: `Invalid role. Must be one of: ${validRoles.join(', ')}` 
+        }, { status: 400 });
+      }
       
       const agent = db
         .prepare('SELECT * FROM agents WHERE name = ? AND workspace_id = ?')
@@ -425,7 +439,7 @@ export async function PUT(request: NextRequest) {
       params.push(now);
       params.push(name, workspaceId);
       
-      if (fieldsToUpdate.length === 1) { // Only updated_at
+      if (fieldsToUpdate.length === 1) {
         return NextResponse.json({ error: 'No fields to update' }, { status: 400 });
       }
       

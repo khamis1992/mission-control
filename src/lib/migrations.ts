@@ -51,6 +51,127 @@ const migrations: Migration[] = [
     }
   },
   {
+    id: '055_project_scaffolds',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS project_scaffolds (
+          id INTEGER PRIMARY KEY,
+          task_id INTEGER NOT NULL,
+          project_type TEXT NOT NULL,
+          framework TEXT NOT NULL,
+          language TEXT NOT NULL,
+          database TEXT,
+          styling TEXT DEFAULT 'tailwind',
+          file_tree TEXT NOT NULL,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          workspace_id INTEGER NOT NULL,
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_scaffolds_task ON project_scaffolds(task_id);
+        CREATE INDEX IF NOT EXISTS idx_scaffolds_workspace ON project_scaffolds(workspace_id);
+      `);
+    }
+  },
+  {
+    id: '056_generated_files',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS generated_files (
+          id INTEGER PRIMARY KEY,
+          task_id INTEGER NOT NULL,
+          path TEXT NOT NULL,
+          content TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          language TEXT,
+          version INTEGER DEFAULT 1,
+          agent_role TEXT,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          workspace_id INTEGER NOT NULL,
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+          UNIQUE(task_id, path, version)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_files_task ON generated_files(task_id);
+        CREATE INDEX IF NOT EXISTS idx_files_hash ON generated_files(content_hash);
+        CREATE INDEX IF NOT EXISTS idx_files_workspace ON generated_files(workspace_id);
+      `);
+    }
+  },
+  {
+    id: '057_github_connections',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS github_connections (
+          id INTEGER PRIMARY KEY,
+          task_id INTEGER NOT NULL,
+          repo_url TEXT NOT NULL,
+          repo_name TEXT NOT NULL,
+          default_branch TEXT DEFAULT 'main',
+          last_commit_sha TEXT,
+          last_push_at INTEGER,
+          is_connected INTEGER DEFAULT 1,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          workspace_id INTEGER NOT NULL,
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_github_task ON github_connections(task_id);
+        CREATE INDEX IF NOT EXISTS idx_github_workspace ON github_connections(workspace_id);
+      `);
+    }
+  },
+  {
+    id: '058_build_runs',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS build_runs (
+          id INTEGER PRIMARY KEY,
+          task_id INTEGER NOT NULL,
+          commit_sha TEXT,
+          status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'success', 'failed')),
+          output TEXT,
+          errors TEXT,
+          duration_ms INTEGER,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          completed_at INTEGER,
+          workspace_id INTEGER NOT NULL,
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_builds_task ON build_runs(task_id);
+        CREATE INDEX IF NOT EXISTS idx_builds_status ON build_runs(status);
+        CREATE INDEX IF NOT EXISTS idx_builds_workspace ON build_runs(workspace_id);
+      `);
+    }
+  },
+  {
+    id: '059_deployments',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS deployments (
+          id INTEGER PRIMARY KEY,
+          task_id INTEGER NOT NULL,
+          provider TEXT NOT NULL CHECK (provider IN ('vercel', 'netlify', 'manual')),
+          deployment_id TEXT,
+          repo_url TEXT,
+          branch TEXT DEFAULT 'main',
+          status TEXT NOT NULL CHECK (status IN ('queued', 'building', 'ready', 'error')),
+          live_url TEXT,
+          build_logs TEXT,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          deployed_at INTEGER,
+          workspace_id INTEGER NOT NULL,
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_deployments_task ON deployments(task_id);
+        CREATE INDEX IF NOT EXISTS idx_deployments_status ON deployments(status);
+        CREATE INDEX IF NOT EXISTS idx_deployments_workspace ON deployments(workspace_id);
+      `);
+    }
+  },
+  {
     id: '053_workflow_persona_schema',
     up: (db) => {
       db.exec(`
@@ -1631,14 +1752,170 @@ const migrations: Migration[] = [
         db.exec(`CREATE INDEX IF NOT EXISTS idx_task_memory_links_memory_path ON task_memory_links(memory_path)`)
         db.exec(`CREATE INDEX IF NOT EXISTS idx_task_memory_links_context ON task_memory_links(link_context)`)
         db.exec(`CREATE INDEX IF NOT EXISTS idx_task_memory_links_task_context ON task_memory_links(task_id, link_context)`)
-        db.exec(`CREATE INDEX IF NOT EXISTS idx_task_memory_links_created_at ON task_memory_links(created_at)`)
-        db.exec(`CREATE INDEX IF NOT EXISTS idx_task_memory_links_created_by ON task_memory_links(created_by)`)
-        db.exec(`CREATE INDEX IF NOT EXISTS idx_task_memory_links_workspace_id ON task_memory_links(workspace_id)`)
-      }
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_task_memory_links_created_at ON task_memory_links(created_at)`)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_task_memory_links_created_by ON task_memory_links(created_by)`)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_task_memory_links_workspace_id ON task_memory_links(workspace_id)`)
     }
-  ]
-  
-  export function runMigrations(db: Database.Database) {
+  },
+  {
+    id: '053_task_logs',
+    up(db: Database.Database) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id INTEGER NOT NULL,
+          type TEXT NOT NULL,
+          text TEXT NOT NULL,
+          timestamp INTEGER NOT NULL,
+          source TEXT NOT NULL DEFAULT 'build',
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        )
+      `)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_task_logs_task_id ON task_logs(task_id)`)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_task_logs_timestamp ON task_logs(timestamp)`)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_task_logs_type ON task_logs(type)`)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_task_logs_source ON task_logs(source)`)
+    }
+  },
+  {
+    id: '054_project_intelligence',
+    up(db: Database.Database) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS project_intelligence (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          project_id INTEGER NOT NULL,
+          index_data TEXT NOT NULL,
+          last_indexed INTEGER NOT NULL,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          UNIQUE(project_id)
+        )
+      `)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_project_intelligence_project_id ON project_intelligence(project_id)`)
+    }
+  },
+  {
+    id: '055_superpowers',
+    up(db: Database.Database) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS superpowers_design_docs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id INTEGER NOT NULL,
+          title TEXT NOT NULL,
+          content TEXT NOT NULL,
+          version INTEGER NOT NULL DEFAULT 1,
+          status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'approved', 'rejected')),
+          created_by TEXT NOT NULL,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        )
+      `)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_sp_design_docs_task_id ON superpowers_design_docs(task_id)`)
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS superpowers_plans (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id INTEGER NOT NULL,
+          design_doc_id INTEGER NOT NULL,
+          title TEXT NOT NULL,
+          content TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'approved', 'in_progress', 'completed')),
+          created_by TEXT NOT NULL,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+          FOREIGN KEY (design_doc_id) REFERENCES superpowers_design_docs(id) ON DELETE CASCADE
+        )
+      `)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_sp_plans_task_id ON superpowers_plans(task_id)`)
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS superpowers_plan_tasks (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          plan_id INTEGER NOT NULL,
+          task_order INTEGER NOT NULL,
+          title TEXT NOT NULL,
+          description TEXT NOT NULL,
+          files_created TEXT NOT NULL DEFAULT '[]',
+          files_modified TEXT NOT NULL DEFAULT '[]',
+          verification_command TEXT,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed', 'failed')),
+          assignee TEXT,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          completed_at INTEGER,
+          FOREIGN KEY (plan_id) REFERENCES superpowers_plans(id) ON DELETE CASCADE
+        )
+      `)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_sp_plan_tasks_plan_id ON superpowers_plan_tasks(plan_id)`)
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS superpowers_review_stages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id INTEGER NOT NULL,
+          plan_task_id INTEGER,
+          stage TEXT NOT NULL CHECK (stage IN ('spec_compliance', 'code_quality')),
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'approved', 'rejected')),
+          reviewer TEXT NOT NULL,
+          notes TEXT,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          completed_at INTEGER,
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+          FOREIGN KEY (plan_task_id) REFERENCES superpowers_plan_tasks(id) ON DELETE SET NULL
+        )
+      `)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_sp_review_stages_task_id ON superpowers_review_stages(task_id)`)
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS superpowers_worktrees (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id INTEGER NOT NULL,
+          worktree_path TEXT NOT NULL,
+          branch_name TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'merged', 'abandoned')),
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          merged_at INTEGER,
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        )
+      `)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_sp_worktrees_task_id ON superpowers_worktrees(task_id)`)
+    }
+  }
+]
+
+const agentsMigration: Migration = {
+  id: '036_agents_validation',
+  up: (db) => {
+    const agentCols = db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>
+    
+    if (!agentCols.some((c) => c.name === 'runtime_type')) {
+      db.exec(`ALTER TABLE agents ADD COLUMN runtime_type TEXT`)
+    }
+    
+    if (!agentCols.some((c) => c.name === 'hidden')) {
+      db.exec(`ALTER TABLE agents ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0`)
+    }
+    
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_agents_role ON agents(role)`)
+    
+    db.exec(`
+      UPDATE agents 
+      SET role = COALESCE(role, 'developer')
+      WHERE role IS NULL OR role = ''
+    `)
+    
+    db.exec(`
+      UPDATE agents 
+      SET hidden = 1
+      WHERE config IS NOT NULL AND config LIKE '%"isDefault": true%'
+    `)
+  }
+}
+
+migrations.push(agentsMigration)
+
+export function runMigrations(db: Database.Database) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       id TEXT PRIMARY KEY,

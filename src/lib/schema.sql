@@ -144,5 +144,53 @@ CREATE INDEX IF NOT EXISTS idx_quality_reviews_task_id ON quality_reviews(task_i
 CREATE INDEX IF NOT EXISTS idx_quality_reviews_reviewer ON quality_reviews(reviewer);
 CREATE INDEX IF NOT EXISTS idx_gateway_health_logs_gateway_id ON gateway_health_logs(gateway_id);
 CREATE INDEX IF NOT EXISTS idx_gateway_health_logs_probed_at ON gateway_health_logs(probed_at);
+CREATE TABLE IF NOT EXISTS iteration_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    iteration INTEGER NOT NULL DEFAULT 1,
+    name TEXT NOT NULL,
+    goal TEXT,
+    scope TEXT,
+    estimated_hours INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    workspace_id INTEGER NOT NULL,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+    UNIQUE(task_id, iteration, workspace_id)
+);
+CREATE INDEX IF NOT EXISTS idx_iteration_plans_task ON iteration_plans(task_id);
+CREATE INDEX IF NOT EXISTS idx_iteration_plans_workspace ON iteration_plans(workspace_id);
+CREATE TABLE IF NOT EXISTS iteration_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    subtasks TEXT,
+    estimated_hours INTEGER NOT NULL DEFAULT 1,
+    completed INTEGER DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    FOREIGN KEY (plan_id) REFERENCES iteration_plans(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_iteration_tasks_plan ON iteration_tasks(plan_id);
+CREATE TABLE IF NOT EXISTS project_analyses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    project_type TEXT NOT NULL,
+    framework TEXT NOT NULL,
+    language TEXT NOT NULL,
+    database TEXT,
+    styling TEXT,
+    complexity TEXT NOT NULL,
+    estimated_files INTEGER NOT NULL DEFAULT 10,
+    estimated_hours INTEGER NOT NULL DEFAULT 40,
+    tech_stack TEXT,
+    issues TEXT,
+    recommendations TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    workspace_id INTEGER NOT NULL,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+    UNIQUE(task_id, workspace_id)
+);
+CREATE INDEX IF NOT EXISTS idx_project_analyses_task ON project_analyses(task_id);
+CREATE INDEX IF NOT EXISTS idx_project_analyses_workspace ON project_analyses(workspace_id);
 
 -- Sample data intentionally omitted - seed in dev scripts if needed.

@@ -233,3 +233,45 @@ export const createApprovalRequestSchema = z.object({
   reason: z.string().max(2000).optional(),
   approval_timeout: z.number().int().min(60).max(86400).default(3600),
 })
+
+export const createIterationSchema = z.object({
+  action: z.enum(['create', 'complete', 'plan', 'schedule', 'tasks', 'status']),
+  name: z.string().min(1, 'Name is required').max(200).optional(),
+  goal: z.string().max(5000).optional(),
+  scope: z.object({
+    files: z.array(z.string().min(1).max(200)).max(100).default([] as string[]),
+    features: z.array(z.string().min(1).max(200)).max(50).default([] as string[]),
+    database_changes: z.array(z.string().min(1).max(200)).max(20).optional(),
+    api_endpoints: z.array(z.string().min(1).max(200)).max(50).optional(),
+  }).default({ files: [], features: [] }),
+  planId: z.number().int().positive().optional(),
+  tasks: z.array(z.object({
+    title: z.string().min(1).max(500),
+    description: z.string().max(5000).optional(),
+    subtasks: z.array(z.object({
+      title: z.string().min(1).max(500),
+      description: z.string().max(5000).optional(),
+      estimated_hours: z.number().min(0).max(100).optional(),
+      completed: z.boolean().optional(),
+    })).max(100).default([]),
+    estimated_hours: z.number().min(0).max(100).optional(),
+    completed: z.boolean().optional(),
+  })).max(100).optional(),
+  iterations: z.number().int().min(1).max(50).optional(),
+})
+
+export const updateIterationSchema = z.object({
+  planId: z.number().int().positive(),
+  tasks: z.array(z.object({
+    title: z.string().min(1).max(500),
+    description: z.string().max(5000).optional(),
+    subtasks: z.array(z.object({
+      title: z.string().min(1).max(500),
+      description: z.string().max(5000).optional(),
+      estimated_hours: z.number().min(0).max(100).optional(),
+      completed: z.boolean().optional(),
+    })).max(100).default([]),
+    estimated_hours: z.number().min(0).max(100).optional(),
+    completed: z.boolean().optional(),
+  })).max(100),
+})

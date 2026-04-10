@@ -130,7 +130,7 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     type: 'orchestrator',
     label: 'Orchestrator',
     description: 'Primary coordinator with full tool access. Routes tasks to specialist agents and manages workflows.',
-    emoji: '\ud83e\udded',
+    emoji: '🔗',
     modelTier: 'opus',
     toolCount: 23,
     config: {
@@ -139,9 +139,9 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
         fallbacks: OPUS_FALLBACKS,
       },
       identity: {
-        name: '',
+        name: 'Orchestrator',
         theme: 'operator strategist',
-        emoji: '\ud83e\udded',
+        emoji: '🔗',
       },
       subagents: {
         allowAgents: [],
@@ -172,7 +172,7 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     type: 'developer',
     label: 'Developer',
     description: 'Full-stack builder with Docker bridge networking, exec/write access, and subagent spawning.',
-    emoji: '\ud83d\udee0\ufe0f',
+    emoji: '🛡️',
     modelTier: 'sonnet',
     toolCount: 21,
     config: {
@@ -181,9 +181,9 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
         fallbacks: SONNET_FALLBACKS,
       },
       identity: {
-        name: '',
+        name: 'Developer',
         theme: 'builder engineer',
-        emoji: '\ud83d\udee0\ufe0f',
+        emoji: '🛡️',
       },
       subagents: {
         allowAgents: [],
@@ -216,7 +216,7 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     type: 'specialist-dev',
     label: 'Specialist Dev',
     description: 'Focused developer for specific domains (frontend, backend, blockchain). Docker bridge + write access.',
-    emoji: '\u2699\ufe0f',
+    emoji: '⚙️',
     modelTier: 'sonnet',
     toolCount: 15,
     config: {
@@ -225,9 +225,9 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
         fallbacks: SONNET_FALLBACKS,
       },
       identity: {
-        name: '',
+        name: 'Specialist Dev',
         theme: 'specialist developer',
-        emoji: '\u2699\ufe0f',
+        emoji: '⚙️',
       },
       subagents: {
         model: 'openai/codex-mini-latest',
@@ -258,20 +258,20 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     type: 'reviewer',
     label: 'Reviewer / QA',
     description: 'Read-only access for code review, quality gates, and auditing. Lightweight Haiku model.',
-    emoji: '\ud83d\udd2c',
+    emoji: '🔒',
     modelTier: 'haiku',
     toolCount: 7,
-    config: {
-      model: {
-        primary: 'anthropic/claude-haiku-4-5',
-        fallbacks: HAIKU_FALLBACKS,
-      },
-      identity: {
-        name: '',
-        theme: 'quality reviewer',
-        emoji: '\ud83d\udd2c',
-      },
-      sandbox: {
+      config: {
+        model: {
+          primary: 'anthropic/claude-haiku-4-5',
+          fallbacks: HAIKU_FALLBACKS,
+        },
+        identity: {
+          name: 'Reviewer',
+          theme: 'quality reviewer',
+          emoji: '🔒',
+        },
+        sandbox: {
         mode: 'all',
         workspaceAccess: 'ro',
         scope: 'agent',
@@ -296,7 +296,7 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     type: 'researcher',
     label: 'Researcher',
     description: 'Browser and web access for research tasks. No workspace or code execution.',
-    emoji: '\ud83d\udd0d',
+    emoji: '🔍',
     modelTier: 'sonnet',
     toolCount: 8,
     config: {
@@ -305,9 +305,9 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
         fallbacks: SONNET_FALLBACKS,
       },
       identity: {
-        name: '',
+        name: 'Researcher',
         theme: 'research analyst',
-        emoji: '\ud83d\udd0d',
+        emoji: '🔍',
       },
       sandbox: {
         mode: 'all',
@@ -335,20 +335,20 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     type: 'content-creator',
     label: 'Content Creator',
     description: 'Write and edit access for content generation. No code execution or browser.',
-    emoji: '\u270f\ufe0f',
+    emoji: '✏️',
     modelTier: 'haiku',
     toolCount: 9,
-    config: {
-      model: {
-        primary: 'anthropic/claude-haiku-4-5',
-        fallbacks: HAIKU_FALLBACKS,
-      },
-      identity: {
-        name: '',
-        theme: 'content creator',
-        emoji: '\u270f\ufe0f',
-      },
-      sandbox: {
+      config: {
+        model: {
+          primary: 'anthropic/claude-haiku-4-5',
+          fallbacks: HAIKU_FALLBACKS,
+        },
+        identity: {
+          name: 'Content Creator',
+          theme: 'content creator',
+          emoji: '✏️',
+        },
+        sandbox: {
         mode: 'all',
         workspaceAccess: 'none',
         scope: 'agent',
@@ -377,20 +377,20 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     type: 'security-auditor',
     label: 'Security Auditor',
     description: 'Read-only workspace with bash for security scanning. No write access to prevent tampering.',
-    emoji: '\ud83d\udee1\ufe0f',
+    emoji: '🛡️',
     modelTier: 'sonnet',
     toolCount: 10,
-    config: {
-      model: {
-        primary: 'anthropic/claude-sonnet-4-20250514',
-        fallbacks: SONNET_FALLBACKS,
-      },
-      identity: {
-        name: '',
-        theme: 'security auditor',
-        emoji: '\ud83d\udee1\ufe0f',
-      },
-      sandbox: {
+      config: {
+        model: {
+          primary: 'anthropic/claude-sonnet-4-20250514',
+          fallbacks: SONNET_FALLBACKS,
+        },
+        identity: {
+          name: 'Security Auditor',
+          theme: 'security auditor',
+          emoji: '🛡️',
+        },
+        sandbox: {
         mode: 'all',
         workspaceAccess: 'ro',
         scope: 'agent',

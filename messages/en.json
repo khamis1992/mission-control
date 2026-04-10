@@ -735,6 +735,8 @@
   },
   "taskBoard": {
     "title": "Task Board",
+    "taskBoard": "Task Board",
+    "loadingTasks": "Loading tasks...",
     "allProjects": "All Projects",
     "projects": "Projects",
     "close": "Close",

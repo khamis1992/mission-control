@@ -10,14 +10,77 @@ export interface GeneratedSubtask {
   agent_role: 'planner' | 'architect' | 'backend' | 'frontend' | 'qa' | 'devops' | 'reviewer' | 'recovery'
   execution_mode: 'autonomous'
   parallel_group?: string
+  depends_on?: number[]
+}
+
+interface GoalAnalysis {
+  domain: string
+  entities: string[]
+  modules: string[]
+  workflows: string[]
+  integrations: string[]
+  risks: string[]
+  suggestedArchitecture: string
+  executionStrategy: string
+  complexity: 'low' | 'medium' | 'high'
+}
+
+function getGoalAnalysis(task: Task): GoalAnalysis | null {
+  const metadata = task.metadata 
+    ? (typeof task.metadata === 'string' ? JSON.parse(task.metadata) : task.metadata)
+    : {}
+  return metadata.goal_analysis?.goal_analysis || null
 }
 
 /**
  * Generate subtasks for a mission task using AI task decomposition.
- * Falls back to default subtask structure if AI generation fails.
+ * Uses goal_analysis if available for smarter generation.
  */
 export async function generateSubtasks(rootTask: Task, workspaceId: number): Promise<GeneratedSubtask[]> {
-  const prompt = `You are a senior software architect. Break down this task into 6-10 subtasks.
+  const goalAnalysis = getGoalAnalysis(rootTask)
+  
+  let prompt: string
+  
+  if (goalAnalysis) {
+    prompt = `You are a senior software architect. Break down this task into 6-12 subtasks based on the goal analysis.
+
+Task: ${rootTask.title}
+${rootTask.description || ''}
+
+GOAL ANALYSIS:
+- Domain: ${goalAnalysis.domain}
+- Entities: ${goalAnalysis.entities.join(', ')}
+- Modules: ${goalAnalysis.modules.join(', ')}
+- Workflows: ${goalAnalysis.workflows.join(', ')}
+- Integrations: ${goalAnalysis.integrations.join(', ')}
+- Risks: ${goalAnalysis.risks.join(', ')}
+- Architecture: ${goalAnalysis.suggestedArchitecture}
+- Strategy: ${goalAnalysis.executionStrategy}
+- Complexity: ${goalAnalysis.complexity}
+
+Generate subtasks that are SPECIFIC to this domain and requirements. Include:
+1. Domain-specific modules (based on entities and modules above)
+2. API endpoints for each workflow
+3. Frontend components for each workflow
+4. Integration setup (if any)
+5. Domain-specific tests
+6. Domain-specific deployment
+
+Return ONLY a JSON array (no markdown, no code blocks) with enhanced subtasks:
+[
+  {
+    "title": "Design database schema",
+    "description": "Create schema for ${goalAnalysis.entities.join(', ')} entities",
+    "agent_role": "architect",
+    "execution_mode": "autonomous",
+    "parallel_group": "phase-1",
+    "depends_on": []
+  }
+]
+
+Include "depends_on" array for task dependencies (empty if no dependencies).`
+  } else {
+    prompt = `You are a senior software architect. Break down this task into 6-10 subtasks.
 
 Task: ${rootTask.title}
 ${rootTask.description || ''}
@@ -44,6 +107,7 @@ Return ONLY a JSON array (no markdown, no code blocks):
 ]
 
 Group parallel tasks with same parallel_group (e.g., backend + frontend can run together).`
+  }
 
   try {
     const response = await callClaudeDirectly({

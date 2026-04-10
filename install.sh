@@ -438,6 +438,14 @@ main() {
 
   check_openclaw
 
+  # ── Pre-provision skills, agents, and settings ──
+  info "Running pre-provisioning..."
+  if bash "$INSTALL_DIR/scripts/provision.sh"; then
+    ok "Pre-provisioning complete"
+  else
+    warn "Pre-provisioning failed (non-fatal - will retry on startup)"
+  fi
+
   # ── Print summary ──
   echo ""
   echo "  ╔══════════════════════════════════════╗"
